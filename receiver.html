@@ -1,0 +1,17 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Controle Nuvem — Receiver V14</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#05050a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,system-ui;display:grid;place-items:center;overflow:hidden}
+.bg{position:fixed;inset:0;background:radial-gradient(circle at 30% 20%,#6c4cff22,transparent 35%),radial-gradient(circle at 80% 80%,#20d9a122,transparent 30%),#05050a}
+.card{width:min(720px,92vw);padding:36px;border-radius:32px;text-align:center;background:#ffffff09;border:1px solid #ffffff15;backdrop-filter:blur(22px);box-shadow:0 30px 100px #0009}
+.logo{font-size:64px}.tag{display:inline-block;border:1px solid #ffffff14;background:#ffffff08;border-radius:999px;padding:8px 12px;color:#aeb2c2;font-size:10px;letter-spacing:.08em}
+h1{font-size:36px;letter-spacing:-.04em}.code{font-size:clamp(44px,10vw,82px);font-weight:950;letter-spacing:.16em;margin:18px 0}.state{color:#7f8494}.state.ok{color:#8ef0d0}.pulse{width:12px;height:12px;border-radius:50%;background:#5f6270;display:inline-block;margin-right:8px}.ok .pulse{background:#43e0aa;box-shadow:0 0 18px #43e0aa}
+.hint{color:#777b89;line-height:1.5;max-width:520px;margin:auto}
+.controls{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:22px}.chip{padding:9px 12px;border-radius:12px;background:#ffffff08;border:1px solid #ffffff12;color:#b9bdcb;font-size:10px}
+</style></head><body><div class="bg"></div><main class="card"><div class="logo">◈</div><div class="tag">CONTROLE NUVEM • RECEIVER V14</div><h1>Pronto para jogar</h1><p class="hint">Use o código desta sessão no Controle Nuvem do celular. Esta tela é o receptor do próprio projeto.</p><div class="code" id="code">------</div><div class="state" id="state"><i class="pulse"></i>Aguardando controle…</div><div class="controls" id="controls"></div></main>
+<script>
+const q=new URLSearchParams(location.search),code=(q.get('code')||'').trim().toUpperCase()||String(Math.floor(100000+Math.random()*900000));
+document.querySelector('#code').textContent=code;
+const proto=location.protocol==='https:'?'wss':'ws';let ws;
+function connect(){ws=new WebSocket(`${proto}://${location.host}/ws?role=receiver&code=${encodeURIComponent(code)}`);ws.onopen=()=>{};ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='session'&&m.state==='connected'){document.querySelector('#state').className='state ok';document.querySelector('#state').innerHTML='<i class="pulse"></i>Controle conectado';}if(m.type==='input'){const c=document.createElement('span');c.className='chip';c.textContent='🎮 '+m.control;c.style.opacity='0';document.querySelector('#controls').prepend(c);requestAnimationFrame(()=>c.style.opacity='1');setTimeout(()=>c.remove(),1600)}}catch{}};ws.onclose=()=>{document.querySelector('#state').className='state';document.querySelector('#state').innerHTML='<i class="pulse"></i>Conexão encerrada';setTimeout(connect,1200)}}
+connect();
+</script></body></html>
