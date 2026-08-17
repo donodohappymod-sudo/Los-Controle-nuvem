@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Receptor — Controle Nuvem</title>
+<style>
+body{margin:0;background:#070707;color:#fff;font-family:system-ui;text-align:center;display:grid;place-items:center;min-height:100vh}
+.box{padding:30px}.code{font-size:54px;font-weight:900;letter-spacing:7px;margin:20px}
+#qr{background:#fff;padding:14px;border-radius:14px;display:inline-block}
+#state{color:#888}
+</style>
+</head>
+<body>
+<div class="box">
+<h1>🎮 Controle Nuvem</h1>
+<p>Escaneie este QR Code com o iPhone</p>
+<div id="qr"></div>
+<div class="code" id="code">------</div>
+<p id="state">Aguardando iPhone…</p>
+</div>
+<script>
+const code=String(Math.floor(100000+Math.random()*900000));
+document.querySelector('#code').textContent=code;
+const connectUrl=(location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?role=controller&code='+code;
+document.querySelector('#qr').innerHTML='<img alt="QR Code" width="220" height="220" src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data='+encodeURIComponent(connectUrl)+'">';
+const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?role=receiver&code='+code);
+ws.onopen=()=>document.querySelector('#state').textContent='Pronto para conectar';
+ws.onclose=()=>document.querySelector('#state').textContent='Desconectado';
+ws.onmessage=e=>{try{const m=JSON.parse(e.data);document.querySelector('#state').textContent=m.type==='axis'?`Joystick: ${m.x}, ${m.y}`:`${m.type}: ${m.key}`}catch(err){}};
+</script>
+</body>
+</html>
