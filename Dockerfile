@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/server.js ./server.js
 COPY --from=builder /app/sql ./sql
 COPY --from=builder /app/scripts ./scripts
 RUN mkdir -p /var/data/generated /var/data/uploads
