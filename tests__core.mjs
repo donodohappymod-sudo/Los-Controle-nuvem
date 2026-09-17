@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+assert.ok(fs.existsSync('package.json'));
+assert.ok(fs.existsSync('Dockerfile'));
+assert.ok(fs.existsSync('render.yaml'));
+assert.ok(fs.existsSync('sql/001_init.sql'));
+assert.ok(fs.readFileSync('render.yaml','utf8').includes('runtime: docker'));
+assert.ok(fs.readFileSync('Dockerfile','utf8').includes('ffmpeg'));
+assert.ok(fs.readFileSync('sql/001_init.sql','utf8').includes('CREATE TABLE IF NOT EXISTS users'));
+execFileSync('node',['--check','scripts/monitor.mjs'],{stdio:'inherit'});
+console.log('LOS COLLECTOR core smoke tests: PASS');

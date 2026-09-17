@@ -1,0 +1,69 @@
+services:
+  - type: web
+    name: los-collector
+    runtime: docker
+    plan: 1c-2g
+    region: ohio
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: STORAGE_ROOT
+        value: /var/data
+      - key: DATABASE_URL
+        fromDatabase:
+          name: los-collector-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: JOB_SECRET
+        generateValue: true
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: TMDB_API_KEY
+        sync: false
+      - key: APP_URL
+        sync: false
+    disk:
+      name: los-collector-storage
+      mountPath: /var/data
+      sizeGB: 10
+
+  - type: cron
+    name: los-collector-monitor
+    runtime: docker
+    plan: 0.5c-512mb
+    region: ohio
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: node scripts/monitor.mjs
+    schedule: "*/15 * * * *"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: los-collector-db
+          property: connectionString
+      - key: JOB_SECRET
+        fromService:
+          name: los-collector
+          envVarKey: JOB_SECRET
+      - key: APP_URL
+        fromService:
+          name: los-collector
+          property: hostport
+        # monitor.mjs prefixes http:// when the value is a private host:port.
+      - key: NODE_ENV
+        value: production
+
+databases:
+  - name: los-collector-db
+    plan: free
+    region: ohio
+    databaseName: loscollector
+    user: loscollector
