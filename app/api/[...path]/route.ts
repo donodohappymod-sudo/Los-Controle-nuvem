@@ -24,7 +24,7 @@ export async function GET(req:NextRequest,{params}:{params:Promise<{path:string[
   if(p==='library'){const u=await requireUser();const q=new URL(req.url).searchParams;const category=q.get('category');const status=q.get('status');const args:any[]=[u.id];let where='WHERE c.user_id=$1';if(category&&category!=='TODOS'){args.push(category);where+=` AND c.category=$${args.length}`;}if(status&&status!=='TODOS'){args.push(status);where+=` AND c.status=$${args.length}`;}const r=await query(`SELECT c.*,s.name source_name FROM contents c LEFT JOIN sources s ON s.id=c.source_id ${where} ORDER BY c.discovered_at DESC LIMIT 1000`,args);return json({contents:r.rows});}
   if(p==='library/export'){const u=await requireUser();const r=await query<any>('SELECT title,url,group_name,logo_url,category FROM contents WHERE user_id=$1 ORDER BY category,title',[u.id]);const text=buildM3U(r.rows.map((x:any)=>({title:x.title,url:x.url,group:x.group_name||'',logo:x.logo_url||'',category:x.category,attrs:{}})));return new NextResponse(text,{headers:{'Content-Type':'audio/x-mpegurl; charset=utf-8','Content-Disposition':'attachment; filename=los-collector.m3u'}});}
   if(p==='studio/history'){const u=await requireUser();const r=await query('SELECT * FROM studio_projects WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100',[u.id]);return json({projects:r.rows});}
-  if(p==='studio/file'){const u=await requireUser();const id=new URL(req.url).searchParams.get('id');const r=await query<any>('SELECT output_path FROM studio_projects WHERE id=$1 AND user_id=$2',[id,u.id]);if(!r.rowCount)return json({error:'Arquivo não encontrado.'},404);const root=process.env.STORAGE_ROOT||path.join(process.cwd(),'storage');const rel=String(r.rows[0].output_path||'').replace(/^[/\\]+/,'');if(rel.split(/[\\/]+/).some(part=>part==='..'))return json({error:'Caminho inválido.'},400);const file=path.join(root,rel);const data=await fs.readFile(file);return new NextResponse(data,{headers:{'Content-Type':'video/mp4','Content-Disposition':'attachment; filename=\"los-collector-studio.mp4\"'}});}
+  if(p==='studio/file'){const u=await requireUser();const id=new URL(req.url).searchParams.get('id');const r=await query<any>('SELECT output_path FROM studio_projects WHERE id=$1 AND user_id=$2',[id,u.id]);if(!r.rowCount)return json({error:'Arquivo não encontrado.'},404);const root=process.env.STORAGE_ROOT||path.join(process.cwd(),'storage');const rel=String(r.rows[0].output_path||'').replace(/^[/\\]+/,'');if(rel.split(/[\\/]+/).some(part=>part==='..'))return json({error:'Caminho inválido.'},400);const file=path.join(/*turbopackIgnore: true*/ root,rel);const data=await fs.readFile(file);return new NextResponse(data,{headers:{'Content-Type':'video/mp4','Content-Disposition':'attachment; filename=\"los-collector-studio.mp4\"'}});}
   return json({error:'Rota não encontrada.'},404);
  }catch(e){return fail(e);} }
 export async function POST(req:NextRequest,{params}:{params:Promise<{path:string[]}>}){ const p=(await params).path.join('/'); try{
@@ -38,7 +38,7 @@ export async function POST(req:NextRequest,{params}:{params:Promise<{path:string
   if(p==='settings/password'){const b=await body(req);const current=String(b.current||''), next=String(b.next||'');const r=await query<any>('SELECT password_hash FROM users WHERE id=$1',[u.id]);if(!verifyPassword(current,r.rows[0].password_hash))return json({error:'Senha atual incorreta.'},401);if(next.length<8)return json({error:'A nova senha precisa ter pelo menos 8 caracteres.'},422);await query('UPDATE users SET password_hash=$1,updated_at=now() WHERE id=$2',[hashPassword(next),u.id]);return json({ok:true});}
   if(p==='tmdb/search'){const b=await body(req);return json({results:await tmdbSearch(String(b.query||''),b.type==='tv'?'tv':'movie')});}
   if(p==='tmdb/details'){const b=await body(req);return json({details:await tmdbDetails(String(b.id),b.type==='tv'?'tv':'movie')});}
-  if(p==='studio/upload'){const form=await req.formData();const kind=String(form.get('kind')||'');const file=form.get('file');if(!(file instanceof File))return json({error:'Arquivo não enviado.'},422);if(!['logo','background'].includes(kind))return json({error:'Tipo de upload inválido.'},422);const max=kind==='background'?200:10; const allowed=kind==='background'?['video/mp4','video/webm','video/quicktime','video/x-matroska']:['image/png','image/jpeg','image/webp']; if(file.type && !allowed.includes(file.type))return json({error:'Formato de arquivo não permitido.'},422);const bytes=await file.arrayBuffer();if(bytes.byteLength>max*1024*1024)return json({error:`Arquivo acima de ${max} MB.`},422);const ext=(file.name.split('.').pop()||'bin').toLowerCase().replace(/[^a-z0-9]/g,'');const root=process.env.STORAGE_ROOT||path.join(process.cwd(),'storage');const dir=path.join(root,'uploads');await fs.mkdir(dir,{recursive:true});const out=path.join(dir,`${crypto.randomUUID()}.${ext}`);await fs.writeFile(out,Buffer.from(bytes));const relative=path.relative(root,out).replaceAll('\\','/'); return json({ok:true,path:relative});}
+  if(p==='studio/upload'){const form=await req.formData();const kind=String(form.get('kind')||'');const file=form.get('file');if(!(file instanceof File))return json({error:'Arquivo não enviado.'},422);if(!['logo','background'].includes(kind))return json({error:'Tipo de upload inválido.'},422);const max=kind==='background'?200:10; const allowed=kind==='background'?['video/mp4','video/webm','video/quicktime','video/x-matroska']:['image/png','image/jpeg','image/webp']; if(file.type && !allowed.includes(file.type))return json({error:'Formato de arquivo não permitido.'},422);const bytes=await file.arrayBuffer();if(bytes.byteLength>max*1024*1024)return json({error:`Arquivo acima de ${max} MB.`},422);const ext=(file.name.split('.').pop()||'bin').toLowerCase().replace(/[^a-z0-9]/g,'');const root=process.env.STORAGE_ROOT||path.join(process.cwd(),'storage');const dir=path.join(/*turbopackIgnore: true*/ root,'uploads');await fs.mkdir(dir,{recursive:true});const out=path.join(/*turbopackIgnore: true*/ dir,`${crypto.randomUUID()}.${ext}`);await fs.writeFile(out,Buffer.from(bytes));const relative=path.relative(root,out).replaceAll('\\','/'); return json({ok:true,path:relative});}
   if(p==='studio/render'){
     const b=await body(req);
     const title=String(b.title||'').trim();
@@ -46,7 +46,7 @@ export async function POST(req:NextRequest,{params}:{params:Promise<{path:string
     const duration=Math.min(120,Math.max(5,Number(b.duration)||15));
     const format=b.format==='16:9'?'16:9':'9:16';
     const root=process.env.STORAGE_ROOT||path.join(process.cwd(),'storage');
-    const outDir=path.join(root,'generated');
+    const outDir=path.join(/*turbopackIgnore: true*/ root,'generated');
     await fs.mkdir(outDir,{recursive:true});
     const id=crypto.randomUUID();
     const output=path.join(outDir,`${id}.mp4`);
@@ -59,7 +59,7 @@ export async function POST(req:NextRequest,{params}:{params:Promise<{path:string
       if(!cr.ok)throw new Error('Não foi possível obter a capa do TMDB.');
       const buf=Buffer.from(await cr.arrayBuffer());
       if(buf.byteLength>10*1024*1024)throw new Error('Capa muito grande.');
-      coverPath=path.join(root,`${id}-cover.jpg`);
+      coverPath=path.join(/*turbopackIgnore: true*/ root,`${id}-cover.jpg`);
       await fs.writeFile(coverPath,buf);
     }
     const normalizeRelative=(value:string)=>value.trim().replace(/^[/\\]+/,'');
@@ -67,10 +67,10 @@ export async function POST(req:NextRequest,{params}:{params:Promise<{path:string
     const bgRaw=normalizeRelative(String(b.backgroundPath||''));
     const logoRaw=normalizeRelative(String(b.logoPath||''));
     if(!isSafeRelative(bgRaw)||!isSafeRelative(logoRaw))throw new Error('Caminho de arquivo inválido.');
-    const bgPath=bgRaw?path.join(root,bgRaw):'';
-    const logoPath=logoRaw?path.join(root,logoRaw):'';
-    const titleFile=path.join(root,`${id}-title.txt`);
-    const infoFile=path.join(root,`${id}-info.txt`);
+    const bgPath=bgRaw?path.join(/*turbopackIgnore: true*/ root,bgRaw):'';
+    const logoPath=logoRaw?path.join(/*turbopackIgnore: true*/ root,logoRaw):'';
+    const titleFile=path.join(/*turbopackIgnore: true*/ root,`${id}-title.txt`);
+    const infoFile=path.join(/*turbopackIgnore: true*/ root,`${id}-info.txt`);
     const info=[String(b.genre||'').trim(),String(b.description||'').trim()].filter(Boolean).join(' • ').slice(0,500);
     await fs.writeFile(titleFile,title,'utf8');
     await fs.writeFile(infoFile,info,'utf8');
