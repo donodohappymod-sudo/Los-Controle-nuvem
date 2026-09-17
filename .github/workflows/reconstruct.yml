@@ -1,5 +1,7 @@
 name: Reconstruct project
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: write
@@ -9,7 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Extract release
-        run: unzip -o LOS_COLLECTOR_RELEASE.zip -d .
+        run: |
+          unzip -o LOS_COLLECTOR_RELEASE.zip -d .
+          rm -f LOS_COLLECTOR_RELEASE.zip
       - name: Commit reconstructed project
         run: |
           git config user.name github-actions[bot]
