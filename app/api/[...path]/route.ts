@@ -63,12 +63,12 @@ export async function POST(req:NextRequest,{params}:{params:Promise<{path:string
       await fs.writeFile(coverPath,buf);
     }
     const normalizeRelative=(value:string)=>value.trim().replace(/^[/\\]+/,'');
+    const isSafeRelative=(value:string)=>value==='' || !value.split(/[\\/]+/).some(part=>part==='..');
     const bgRaw=normalizeRelative(String(b.backgroundPath||''));
     const logoRaw=normalizeRelative(String(b.logoPath||''));
-    const bgPath=bgRaw?path.resolve(root,bgRaw):'';
-    const logoPath=logoRaw?path.resolve(root,logoRaw):'';
-    if(bgPath&&!bgPath.startsWith(path.resolve(root)+path.sep))throw new Error('Background inválido.');
-    if(logoPath&&!logoPath.startsWith(path.resolve(root)+path.sep))throw new Error('Logo inválido.');
+    if(!isSafeRelative(bgRaw)||!isSafeRelative(logoRaw))throw new Error('Caminho de arquivo inválido.');
+    const bgPath=bgRaw?path.join(root,bgRaw):'';
+    const logoPath=logoRaw?path.join(root,logoRaw):'';
     const titleFile=path.join(root,`${id}-title.txt`);
     const infoFile=path.join(root,`${id}-info.txt`);
     const info=[String(b.genre||'').trim(),String(b.description||'').trim()].filter(Boolean).join(' • ').slice(0,500);
