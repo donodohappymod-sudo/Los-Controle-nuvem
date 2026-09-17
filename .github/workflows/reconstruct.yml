@@ -1,0 +1,19 @@
+name: Reconstruct project
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  reconstruct:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract release
+        run: unzip -o LOS_COLLECTOR_RELEASE.zip -d .
+      - name: Commit reconstructed project
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Restore LOS COLLECTOR project structure" || exit 0
+          git push
