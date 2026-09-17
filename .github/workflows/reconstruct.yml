@@ -10,10 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Extract release
+      - name: Extract release into repository root
         run: |
-          unzip -o LOS_COLLECTOR_RELEASE.zip -d .
-          rm -f LOS_COLLECTOR_RELEASE.zip
+          unzip -o LOS_COLLECTOR_RELEASE.zip -d .release
+          cp -a .release/LOS_COLLECTOR_RELEASE/. .
+          rm -rf .release LOS_COLLECTOR_RELEASE.zip RECONSTRUCTION_TRIGGER.txt
       - name: Commit reconstructed project
         run: |
           git config user.name github-actions[bot]
