@@ -164,7 +164,7 @@ async function discoverWithBrowser(startUrl:string):Promise<M3UItem[]> {
     const current=queue.shift()!; if(seen.has(current)) continue; seen.add(current);
     let browser:any; try { browser=await fetchWithBrowser(current); } catch { continue; }
     if(browser.status>=400) continue;
-    const titleMatch=browser.html.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i);
+    const titleMatch=browser.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     const ogTitle=browser.html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
     const title=decodeHtml(ogTitle?.[1]||titleMatch?.[1]||'');
     extractJsonLd(browser.html,browser.url,all); addMediaLinks(browser.html,browser.url,title,title,all);
