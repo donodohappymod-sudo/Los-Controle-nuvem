@@ -157,6 +157,28 @@ async function fetchWithBrowser(url:string) {
     } finally { await browser.close(); }
   } catch(e:any) { throw new Error('Navegador automático indisponível: '+(e?.message||'erro desconhecido')); }
 }
+async function discoverWithBrowser(startUrl:string):Promise<M3UItem[]> {
+  const start=await assertPublicUrl(startUrl);
+  const queue=[start.toString()]; const queued=new Set(queue); const seen=new Set<string>(); const all:M3UItem[]=[];
+  while(queue.length && seen.size<BROWSER_MAX_PAGES) {
+    const current=queue.shift()!; if(seen.has(current)) continue; seen.add(current);
+    let browser:any; try { browser=await fetchWithBrowser(current); } catch { continue; }
+    if(browser.status>=400) continue;
+    const titleMatch=browser.html.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i);
+    const ogTitle=browser.html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+    const title=decodeHtml(ogTitle?.[1]||titleMatch?.[1]||'');
+    extractJsonLd(browser.html,browser.url,all); addMediaLinks(browser.html,browser.url,title,title,all);
+    for(const u of browser.media||[]) all.push(itemFrom(u,title,title,''));
+    for(const link of browser.links||[]) {
+      if(queue.length+seen.size>=BROWSER_MAX_PAGES) break;
+      try { const parsed=new URL(link); if(parsed.origin!==start.origin) continue; const normalized=parsed.toString();
+        if(!queued.has(normalized)&&!seen.has(normalized)&&likelyCatalogPage(normalized)) { await assertPublicUrl(normalized); queued.add(normalized); queue.push(normalized); }
+      } catch {}
+    }
+  }
+  return dedupeItems(all);
+}
+
 export async function discoverPublicM3U(startUrl:string):Promise<M3UItem[]> {
   let first:any;
   try {
@@ -216,5 +238,9 @@ export async function discoverPublicM3U(startUrl:string):Promise<M3UItem[]> {
     }
   }
 
-  return dedupeItems(all);
+  const result=dedupeItems(all);
+  if(result.length===0) {
+    try { const browserItems=await discoverWithBrowser(first.url); if(browserItems.length) return browserItems; } catch {}
+  }
+  return result;
 }
