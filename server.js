@@ -1,7 +1,11 @@
 const http=require('node:http'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),{URL}=require('node:url');
 const PORT=Number(process.env.PORT||10000),ROOT=process.env.STORAGE_ROOT||path.join(process.cwd(),'storage'),DATA=path.join(ROOT,'data.json'),SESS=path.join(ROOT,'sessions.json');
 fs.mkdirSync(ROOT,{recursive:true});
-const secret=process.env.SESSION_SECRET||''; if(process.env.NODE_ENV==='production'&&secret.length<32){console.error('SESSION_SECRET must be at least 32 characters');process.exit(1)}
+const SECRET_FILE=path.join(ROOT,'session-secret.txt');
+let secret=process.env.SESSION_SECRET||'';
+if(secret.length<32){try{secret=fs.readFileSync(SECRET_FILE,'utf8').trim()}catch{secret=''}}
+if(secret.length<32){secret=crypto.randomBytes(48).toString('base64url');try{fs.writeFileSync(SECRET_FILE,secret,{mode:0o600})}catch{}}
+if(secret.length<32)throw Error('Não foi possível inicializar o segredo de sessão');
 const bootstrapEmail=(process.env.BOOTSTRAP_ADMIN_EMAIL||'miguelalvesmillk@gmail.com').trim().toLowerCase(),bootstrapPassword=process.env.BOOTSTRAP_ADMIN_PASSWORD||'change-this-before-production';
 const empty={users:[],sources:[],channels:[],movies:[],series:[],episodes:[],verificationRuns:[],generatedSources:[],studioProjects:[]};
 function read(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'))}catch{return fallback}}
