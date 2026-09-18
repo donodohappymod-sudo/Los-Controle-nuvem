@@ -46,8 +46,8 @@ function htmlItems(text,baseUrl){
   if(kind==='playlist'||isPlaylist||isMedia||isLikely){seen.add(u);const n=streamNameFromUrl(u);out.push({type:/movie|filme/i.test(n)?'movie':'channel',name:n,originalName:n,group:'',logo:'',streamUrl:u,status:'unknown',metadata:{discoveredFrom:'website',kind:isPlaylist?'playlist':kind}})}
  };
  for(const m of src.matchAll(/(?:href|src|data-src|data-url|content)\\s*=\\s*["']([^"']+)["']/gi))add(m[1]);
- for(const m of src.matchAll(/https?:\\/\\/[^\\s"'<>\\]+/gi))add(m[0]);
- for(const m of src.matchAll(/(?:^|["'\\s])(\\/?[^"'\\s<>]+\\.(?:m3u8?|m3u)(?:\\?[^"'\\s<>]*)?)/gi))add(m[1],'playlist');
+  for(const m of src.matchAll(/https?:\/\/[^\s"'<>]+/gi))add(m[0]);
+  for(const m of src.matchAll(/(?:^|["'\s])(\/?[^"'\s<>]+\.(?:m3u8?|m3u)(?:\?[^"'\s<>]*)?)/gi))add(m[1],'playlist');
  return out
 }
 async function fetchText(raw){
