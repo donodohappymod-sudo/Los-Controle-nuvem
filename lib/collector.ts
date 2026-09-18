@@ -6,7 +6,8 @@ const MAX_BYTES = 12 * 1024 * 1024;
 const MAX_PAGES = 80;
 const MAX_QUEUE = 160;
 const REQUEST_TIMEOUT_MS = 15000;
-const USER_AGENT = 'LOS-Collector/2.0';
+const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+const BROWSER_MAX_PAGES = 16;
 
 function isPrivateIp(ip:string) {
   if (net.isIPv4(ip)) {
@@ -142,11 +143,17 @@ async function fetchWithBrowser(url:string) {
       });
       await page.setExtraHTTPHeaders({'Accept-Language':'pt-BR,pt;q=0.9,en;q=0.8','Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'});
       const media:string[]=[];
-      page.on('response',response=>{const u=response.url();if(/^https?:/i.test(u)&&/\.(?:m3u8?|mpd|mp4|webm|mov|mkv)(?:$|[?#])/i.test(u))media.push(u);});
+      page.on('response',response=>{
+        const u=response.url();
+        if(!/^https?:/i.test(u)) return;
+        const ct=(response.headers()['content-type']||'').toLowerCase();
+        if(/\.(?:m3u8?|mpd|mp4|webm|mov|mkv)(?:$|[?#])/i.test(u) || /mpegurl|dash\+xml|video\//i.test(ct)) media.push(u);
+      });
       const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:20000});
       await page.waitForTimeout(2500);
       const html=await page.content();
-      return {url:page.url(),status:response?.status()||200,html,media:[...new Set(media)]};
+      const links=await page.locator('a[href],link[href],iframe[src],video[src],source[src]').evaluateAll((els:any[])=>els.map(el=>el.href||el.src).filter(Boolean));
+      return {url:page.url(),status:response?.status()||200,html,media:[...new Set(media)],links:[...new Set(links)]};
     } finally { await browser.close(); }
   } catch(e:any) { throw new Error('Navegador automático indisponível: '+(e?.message||'erro desconhecido')); }
 }
