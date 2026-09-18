@@ -22,17 +22,3 @@ services:
       name: los-collector-storage
       mountPath: /var/data
       sizeGB: 10
-  - type: cron
-    name: los-collector-monitor
-    runtime: docker
-    plan: free
-    region: oregon
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    dockerCommand: node server.js --monitor
-    schedule: "*/15 * * * *"
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: STORAGE_ROOT
-        value: /var/data
