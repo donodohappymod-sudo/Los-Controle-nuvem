@@ -1,5 +1,14 @@
 {
-  "name":"los-collector","version":"3.0.0","private":true,
-  "scripts":{"start":"node server.js","dev":"node --watch server.js","test":"node tests/core.mjs"},
-  "engines":{"node":"22.x"}
+  "name": "los-collector",
+  "version": "3.0.1",
+  "private": true,
+  "scripts": {
+    "build": "node --check server.js && node --check public/app.js && node --check tests/core.mjs",
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node tests/core.mjs"
+  },
+  "engines": {
+    "node": "22.x"
+  }
 }
