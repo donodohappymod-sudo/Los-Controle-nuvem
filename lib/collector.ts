@@ -57,11 +57,11 @@ function abs(raw:string,base:string) {
 }
 
 function cleanText(v:string) {
-  return v.replace(/\\s+/g,' ').replace(/&amp;/g,'&').trim();
+  return v.replace(/\s+/g,' ').replace(/&amp;/g,'&').trim();
 }
 
 function decodeHtml(v:string) {
-  return v.replace(/<[^>]*>/g,' ').replace(/&(?:amp|quot|apos|lt|gt);/g,m=>({'&amp;':'&','&quot;':'"','&apos;':"'",'&lt;':'<','&gt':'>'}[m]||m)).replace(/\\s+/g,' ').trim();
+  return v.replace(/<[^>]*>/g,' ').replace(/&(?:amp|quot|apos|lt|gt);/g,m=>({'&amp;':'&','&quot;':'"','&apos;':"'",'&lt;':'<','&gt;':'>'}[m]||m)).replace(/\s+/g,' ').trim();
 }
 
 function categoryFrom(text:string) {
@@ -76,21 +76,21 @@ function itemFrom(url:string,title:string,group='',logo='',attrs:Record<string,s
 function addMediaLinks(html:string,pageUrl:string,baseTitle:string,baseGroup:string,items:M3UItem[]) {
   const patterns=[
     /(?:href|src|data-src|data-url|data-stream|content)=["']([^"']+)["']/gi,
-    /https?:\\/\\/[^"'\\s<>]+/gi
+    /https?:\/\/[^"'\s<>]+/gi
   ];
   for(const re of patterns) {
     for(const m of html.matchAll(re)) {
       const raw=(m[1]||m[0]).replace(/&amp;/g,'&');
       const u=abs(raw,pageUrl);
       if(!u || !/^https?:/i.test(u)) continue;
-      if(!/\\.(?:m3u8?|mpd|mp4|webm|mov|mkv)(?:$|[?#])/i.test(u) && !/(?:m3u8|playlist|manifest|stream|live|video)/i.test(u)) continue;
+      if(!/\.(?:m3u8?|mpd|mp4|webm|mov|mkv)(?:$|[?#])/i.test(u) && !/(?:m3u8|playlist|manifest|stream|live|video)/i.test(u)) continue;
       items.push(itemFrom(u,baseTitle,baseGroup,''));
     }
   }
 }
 
 function extractJsonLd(html:string,pageUrl:string,items:M3UItem[]) {
-  for(const m of html.matchAll(/<script[^>]+type=["']application\\/ld\\+json["'][^>]*>([\\s\\S]*?)<\\/script>/gi)) {
+  for(const m of html.matchAll(/<script[^>]+type=["']application\/ld\\+json["'][^>]*>([\s\\S]*?)<\/script>/gi)) {
     try {
       const raw=JSON.parse(m[1].trim());
       const list=Array.isArray(raw)?raw:[raw];
@@ -152,14 +152,14 @@ export async function discoverPublicM3U(startUrl:string):Promise<M3UItem[]> {
     catch { continue; }
 
     const ct=page.response.headers.get('content-type')||'';
-    const isManifest=/mpegurl|dash|vnd.apple.mpegurl/i.test(ct)||/\\.(?:m3u8?|mpd)(?:$|[?#])/i.test(current);
+    const isManifest=/mpegurl|dash|vnd.apple.mpegurl/i.test(ct)||/\.(?:m3u8?|mpd)(?:$|[?#])/i.test(current);
     if(isManifest) {
       all.push(...parseM3U(page.text));
       continue;
     }
-    if(!/html|xml|json|text\\//i.test(ct) && !/<html|<body|<video|<script/i.test(page.text)) continue;
+    if(!/html|xml|json|text\//i.test(ct) && !/<html|<body|<video|<script/i.test(page.text)) continue;
 
-    const titleMatch=page.text.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i);
+    const titleMatch=page.text.match(/<title[^>]*>([\s\\S]*?)<\/title>/i);
     const ogTitle=page.text.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
     const pageTitle=decodeHtml(ogTitle?.[1]||titleMatch?.[1]||'');
     const group=pageTitle;
@@ -169,7 +169,7 @@ export async function discoverPublicM3U(startUrl:string):Promise<M3UItem[]> {
     for(const link of extractPageLinks(page.text,page.url,base.origin)) {
       if(seen.size+queue.length>=MAX_QUEUE) break;
       if(queued.has(link)||seen.has(link)) continue;
-      if(/\\.(?:m3u8?|mpd)(?:$|[?#])/i.test(link) || likelyCatalogPage(link)) {
+      if(/\.(?:m3u8?|mpd)(?:$|[?#])/i.test(link) || likelyCatalogPage(link)) {
         queued.add(link); queue.push(link);
       }
     }
