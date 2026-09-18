@@ -1,21 +1,19 @@
-# LOS COLLECTOR
+# LOS COLLECTOR 4
 
-Web platform for collecting, organizing, diagnosing, monitoring, merging and generating IPTV sources from public/authorized inputs.
+Plataforma web para criar, coletar, organizar, diagnosticar, monitorar, mesclar e gerar fontes IPTV completas: canais, filmes, séries e episódios.
 
-## Modules
-- Authentication and session protection
-- Sources: website, M3U, M3U8, media and manual
-- Collector with M3U parsing and public HTML media-link discovery
-- Library: channels, movies, series and episodes
-- Diagnosis with timeout/HTTP/latency status
-- Server-side monitoring command
-- Source merge and M3U generation
-- Generated source history
-- Studio project management and FFmpeg render pipeline when FFmpeg is installed
-- Responsive cyber-tech UI for mobile and desktop
+## Arquitetura
+- Node.js 22 + HTTP API
+- PostgreSQL em produção
+- Sessão HttpOnly e senha com scrypt
+- Render + Docker + FFmpeg
+- Interface responsiva para Safari/iPhone, Chrome, Edge, Firefox e desktop
 
-## Security
-Never use the collector to bypass authentication, CAPTCHA, DRM, paywalls or anti-bot controls. Only collect content from sources you are authorized to access.
+## Fluxo
+Fontes → Coletor → Biblioteca → Diagnóstico → Monitoramento → Mesclar → Fontes Geradas → Studio.
+
+## Segurança
+Somente fontes públicas/autorizadas. O coletor não contorna login, CAPTCHA, DRM, paywall ou controles anti-bot. URLs privadas/localizadas são bloqueadas e redirecionamentos são revalidados.
 
 ## Deploy
-Set `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, `SESSION_SECRET` and persistent `STORAGE_ROOT`. The initial password is read from environment variables and is never stored in source code. Change it after first access.
+Configure BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_PASSWORD, SESSION_SECRET e DATABASE_URL. A senha inicial vem apenas do ambiente e pode ser alterada dentro de Configurações.
