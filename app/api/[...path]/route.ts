@@ -7,8 +7,8 @@ import { checkUrl } from '@/lib/checker';
 import { tmdbSearch, tmdbDetails } from '@/lib/tmdb';
 import fs from 'node:fs/promises'; import path from 'node:path'; import crypto from 'node:crypto'; import { spawn } from 'node:child_process';
 export const runtime='nodejs'; export const dynamic='force-dynamic';
-const json=(data:any,status=200)=>NextResponse.json(data,{status});
-const fail=(e:any)=>e?.message==='UNAUTHORIZED'?json({error:'Sessão expirada.'},401):json({error:e?.message||'Erro interno.'},400);
+const json=(data:any,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store, max-age=0'}});
+const fail=(e:any)=>{ console.error('[LOS COLLECTOR API]',e); return e?.message==='UNAUTHORIZED'?json({error:'Sessão expirada.'},401):json({error:e?.message||'Erro interno.'},400); };
 async function body(req:NextRequest){try{return await req.json();}catch{return {};}}
 async function ensureBootstrap(){
   const email=(process.env.BOOTSTRAP_ADMIN_EMAIL||'').trim().toLowerCase(), password=process.env.BOOTSTRAP_ADMIN_PASSWORD||'';
