@@ -1,4 +1,5 @@
 .env
-storage/*.json
-storage/sessions.json
+storage/
 *.log
+node_modules/
+.DS_Store
