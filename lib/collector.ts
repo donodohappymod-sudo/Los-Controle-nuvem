@@ -90,7 +90,7 @@ function addMediaLinks(html:string,pageUrl:string,baseTitle:string,baseGroup:str
 }
 
 function extractJsonLd(html:string,pageUrl:string,items:M3UItem[]) {
-  for(const m of html.matchAll(/<script[^>]+type=["']application\/ld\\+json["'][^>]*>([\s\\S]*?)<\/script>/gi)) {
+  for(const m of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
     try {
       const raw=JSON.parse(m[1].trim());
       const list=Array.isArray(raw)?raw:[raw];
@@ -159,7 +159,7 @@ export async function discoverPublicM3U(startUrl:string):Promise<M3UItem[]> {
     }
     if(!/html|xml|json|text\//i.test(ct) && !/<html|<body|<video|<script/i.test(page.text)) continue;
 
-    const titleMatch=page.text.match(/<title[^>]*>([\s\\S]*?)<\/title>/i);
+    const titleMatch=page.text.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     const ogTitle=page.text.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
     const pageTitle=decodeHtml(ogTitle?.[1]||titleMatch?.[1]||'');
     const group=pageTitle;
