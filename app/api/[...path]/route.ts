@@ -10,7 +10,7 @@ export const runtime='nodejs'; export const dynamic='force-dynamic';
 const json=(data:any,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store, max-age=0'}});
 const fail=(e:any)=>{ console.error('[LOS COLLECTOR API]',e); return e?.message==='UNAUTHORIZED'?json({error:'Sessão expirada.'},401):json({error:e?.message||'Erro interno.'},400); };
 async function body(req:NextRequest){try{return await req.json();}catch{return {};}}
-function mediaMeta(item:any){const t=String(item.title||'');const m=t.match(/\b(?:S|T)0*(\\d{1,3})[ ._-]*E0*(\d{1,4})\b/i)||t.match(/temporada\s*0*(\d{1,3}).*?epis[oó]dio\s*0*(\d{1,4})/i);return {series:String(item.group||'').trim()||null,season:m?Number(m[1]):null,episode:m?Number(m[2]):null};}
+function mediaMeta(item:any){const t=String(item.title||'');const m=t.match(/\b(?:S|T)0*(\d{1,3})[ ._-]*E0*(\d{1,4})\b/i)||t.match(/temporada\s*0*(\d{1,3}).*?epis[oó]dio\s*0*(\d{1,4})/i);return {series:String(item.group||'').trim()||null,season:m?Number(m[1]):null,episode:m?Number(m[2]):null};}
 async function ensureBootstrap(){
   const email=(process.env.BOOTSTRAP_ADMIN_EMAIL||'').trim().toLowerCase(), password=process.env.BOOTSTRAP_ADMIN_PASSWORD||'';
   if(!email||!password) return;
