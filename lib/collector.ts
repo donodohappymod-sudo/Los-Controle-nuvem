@@ -131,8 +131,42 @@ function dedupeItems(items:M3UItem[]) {
   });
 }
 
+async function fetchWithBrowser(url:string) {
+  try {
+    const { chromium } = await import('playwright');
+    const browser = await chromium.launch({headless:true});
+    try {
+      const page = await browser.newPage({
+        userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153 Safari/537.36 LOS-Collector/2.0',
+        viewport:{width:1365,height:768}
+      });
+      await page.setExtraHTTPHeaders({'Accept-Language':'pt-BR,pt;q=0.9,en;q=0.8','Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'});
+      const media:string[]=[];
+      page.on('response',response=>{const u=response.url();if(/^https?:/i.test(u)&&/\.(?:m3u8?|mpd|mp4|webm|mov|mkv)(?:$|[?#])/i.test(u))media.push(u);});
+      const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:20000});
+      await page.waitForTimeout(2500);
+      const html=await page.content();
+      return {url:page.url(),status:response?.status()||200,html,media:[...new Set(media)]};
+    } finally { await browser.close(); }
+  } catch(e:any) { throw new Error('Navegador automático indisponível: '+(e?.message||'erro desconhecido')); }
+}
 export async function discoverPublicM3U(startUrl:string):Promise<M3UItem[]> {
-  const first=await fetchText(startUrl);
+  let first:any;
+  try {
+    first=await fetchText(startUrl);
+  } catch(e:any) {
+    if(!/HTTP 403/i.test(String(e?.message||''))) throw e;
+    const browser=await fetchWithBrowser(startUrl);
+    if(browser.status>=400) throw new Error(`HTTP ${browser.status}`);
+    const browserItems:M3UItem[]=[];
+    const titleMatch=browser.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const title=decodeHtml(titleMatch?.[1]||'');
+    addMediaLinks(browser.html,browser.url,title,title,browserItems);
+    for(const u of browser.media) browserItems.push(itemFrom(u,title,title,''));
+    browserItems.push(...parseM3U(browser.html));
+    if(browserItems.length) return dedupeItems(browserItems);
+    first={url:browser.url,response:{headers:{get:()=> 'text/html'}},text:browser.html};
+  }
   const direct=parseM3U(first.text);
   if(direct.length) return dedupeItems(direct);
 
