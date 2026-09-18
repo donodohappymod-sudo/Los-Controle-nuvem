@@ -14,12 +14,83 @@ async function body(req){let s='';for await(const c of req){s+=c;if(s.length>4e6
 const cookie=req=>{const m=(req.headers.cookie||'').match(/(?:^|;\s*)los_session=([^;]+)/);return m&&m[1]},tokenHash=t=>crypto.createHash('sha256').update(t).digest('hex');
 async function auth(req){const t=cookie(req);if(!t)return null;const r=await q('SELECT u.id,u.email,s.token_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()',[tokenHash(t)]);return r.rows[0]||null}
 async function safeUrl(raw){const u=new URL(raw);if(!['http:','https:'].includes(u.protocol))throw Error('Somente HTTP/HTTPS');const h=u.hostname.toLowerCase();if(h==='localhost'||h.endsWith('.local')||h.endsWith('.internal'))throw Error('Destino privado bloqueado');const ips=await dns.lookup(h,{all:true}).catch(()=>[]);for(const x of ips){const ip=x.address;if(/^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)||ip==='::1'||/^f[cd]/i.test(ip)||/^fe80:/i.test(ip))throw Error('Destino privado bloqueado')}return u}
-function attrs(s){const o={};for(const m of s.matchAll(/([\w-]+)="([^"]*)"/g))o[m[1]]=m[2];return o}
-function parseM3U(text){const a=text.split(/\r?\n/),out=[];for(let i=0;i<a.length;i++){if(!a[i].startsWith('#EXTINF'))continue;const at=attrs(a[i]),name=a[i].split(',').slice(1).join(',').trim()||at['tvg-name']||'Sem nome',url=a[i+1]&&!a[i+1].startsWith('#')?a[i+1]:'';if(!url)continue;const z=(at.type||name).toLowerCase(),type=/movie|filme/.test(z)?'movie':/episode|epis[oó]dio/.test(z)?'episode':'channel';out.push({type,name,originalName:name,group:at['group-title']||'',logo:at['tvg-logo']||'',streamUrl:url,status:'unknown',metadata:{tvgId:at['tvg-id']||''}})}return out}
-function htmlItems(text){const out=[],seen=new Set();for(const m of text.matchAll(/https?:\/\/[^\s"'<>]+/gi)){const u=m[0].replace(/[),.;]+$/g,'');if(seen.has(u)||(!/\.(m3u8?|mp4|mkv|ts|mpd)(?:$|[?#])/i.test(u)&&!/(stream|live|playlist|video|movie|episode)/i.test(u)))continue;seen.add(u);let n='Stream detectado';try{n=decodeURIComponent(u.split('/').pop().split('?')[0]).replace(/[-_]+/g,' ').replace(/\.[^.]+$/,'')||n}catch{}out.push({type:/movie|filme/i.test(n)?'movie':'channel',name:n,originalName:n,group:'',logo:'',streamUrl:u,status:'unknown',metadata:{discoveredFrom:'website'}})}return out}
-async function fetchSource(raw){const first=await safeUrl(raw),ac=new AbortController(),timer=setTimeout(()=>ac.abort(),20000);try{let r=await fetch(first,{redirect:'manual',signal:ac.signal,headers:{'user-agent':'LOS-COLLECTOR/4.0'}});if([301,302,303,307,308].includes(r.status)){const loc=r.headers.get('location');if(!loc)throw Error('Redirecionamento sem destino');const target=new URL(loc,first);await safeUrl(target);r=await fetch(target,{redirect:'manual',signal:ac.signal,headers:{'user-agent':'LOS-COLLECTOR/4.0'}})}if(!r.ok)throw Error('HTTP '+r.status);const text=await r.text();if(text.length>12e6)throw Error('Resposta maior que o limite');const ct=r.headers.get('content-type')||'',isM=/\.(m3u8?|txt)$/i.test(first.pathname)||ct.includes('mpegurl')||text.trim().startsWith('#EXTM3U');return {kind:isM?'m3u':'website',items:isM?parseM3U(text):htmlItems(text)}}finally{clearTimeout(timer)}}
+function attrs(s){const o={};for(const m of s.matchAll(/([\\w-]+)\\s*=\\s*("([^"]*)"|'([^']*)'|([^,\\s]+))/g))o[m[1]]=(m[3]??m[4]??m[5]??'').trim();return o}
+function absoluteUrl(raw,base){try{return new URL(String(raw).trim().replaceAll('\\/','/'),base).toString()}catch{return ''}}
+function streamNameFromUrl(raw,fallback='Stream detectado'){try{const u=new URL(raw),n=decodeURIComponent(u.pathname.split('/').pop()||'').replace(/[-_]+/g,' ').replace(/\\.[^.]+$/,'').trim();return n||fallback}catch{return fallback}}
+function parseM3U(text,baseUrl=''){
+ const lines=String(text||'').replace(/^\\uFEFF/,'').split(/\\r?\\n/),out=[],seen=new Set();let pending=null,master=null;
+ for(let i=0;i<lines.length;i++){
+  const line=lines[i].trim(); if(!line)continue;
+  if(/^#EXTINF:/i.test(line)){const at=attrs(line),name=line.split(',').slice(1).join(',').trim()||at['tvg-name']||'Sem nome';pending={at,name};continue}
+  if(/^#EXT-X-STREAM-INF:/i.test(line)){master=attrs(line.slice(line.indexOf(':')+1));continue}
+  if(/^#EXT-X-MEDIA:/i.test(line)){const at=attrs(line.slice(line.indexOf(':')+1));if(at.URI){const u=absoluteUrl(at.URI,baseUrl);if(u&&!seen.has(u)){seen.add(u);out.push({type:'channel',name:at.NAME||at['GROUP-ID']||streamNameFromUrl(u),originalName:at.NAME||'',group:at['GROUP-ID']||'',logo:'',streamUrl:u,status:'unknown',metadata:{discoveredFrom:'m3u8-rendition',language:at.LANGUAGE||''}})} }continue}
+  if(line.startsWith('#'))continue;
+  const url=absoluteUrl(line,baseUrl);if(!url)continue;
+  if(master){
+   if(!seen.has(url)){seen.add(url);const label=master.NAME||((master.RESOLUTION||master.BANDWIDTH)?['HLS',master.RESOLUTION||'',master.BANDWIDTH?Math.round(Number(master.BANDWIDTH)/1000)+'kbps':''].filter(Boolean).join(' '):streamNameFromUrl(url));out.push({type:'channel',name:label,originalName:label,group:'',logo:'',streamUrl:url,status:'unknown',metadata:{discoveredFrom:'m3u8-master',bandwidth:master.BANDWIDTH||'',resolution:master.RESOLUTION||'',codecs:master.CODECS||''}})}master=null;continue
+  }
+  if(pending){
+   const at=pending.at,name=pending.name,z=((at.type||'')+' '+(at['group-title']||'')+' '+name).toLowerCase(),type=/movie|filme|vod/.test(z)?'movie':/episode|epis[oó]dio|season|temporada/.test(z)?'episode':'channel';
+   if(!seen.has(url)){seen.add(url);out.push({type,name,originalName:name,group:at['group-title']||'',logo:at['tvg-logo']||'',streamUrl:url,status:'unknown',metadata:{tvgId:at['tvg-id']||'',language:at['tvg-language']||'',channelId:at['tvg-chno']||''}})}
+   pending=null;continue
+  }
+ }
+ return out
+}
+function htmlItems(text,baseUrl){
+ const src=String(text||'').replaceAll('\\/','/').replace(/&amp;/gi,'&'),out=[],seen=new Set();
+ const add=(raw,kind='website')=>{const u=absoluteUrl(raw,baseUrl);if(!u||seen.has(u)||seen.size>=50)return;if(!/^(https?):/i.test(u))return;
+  const isPlaylist=/\\.(m3u8?|m3u)(?:$|[?#])/i.test(u)||/[?&](?:format|type)=(?:m3u8?|m3u)/i.test(u);
+  const isMedia=/\\.(mp4|mkv|ts|mpd)(?:$|[?#])/i.test(u);
+  const isLikely=/(stream|live|playlist|video|movie|episode|channel|tv|iptv)/i.test(u);
+  if(kind==='playlist'||isPlaylist||isMedia||isLikely){seen.add(u);const n=streamNameFromUrl(u);out.push({type:/movie|filme/i.test(n)?'movie':'channel',name:n,originalName:n,group:'',logo:'',streamUrl:u,status:'unknown',metadata:{discoveredFrom:'website',kind:isPlaylist?'playlist':kind}})}
+ };
+ for(const m of src.matchAll(/(?:href|src|data-src|data-url|content)\\s*=\\s*["']([^"']+)["']/gi))add(m[1]);
+ for(const m of src.matchAll(/https?:\\/\\/[^\\s"'<>\\]+/gi))add(m[0]);
+ for(const m of src.matchAll(/(?:^|["'\\s])(\\/?[^"'\\s<>]+\\.(?:m3u8?|m3u)(?:\\?[^"'\\s<>]*)?)/gi))add(m[1],'playlist');
+ return out
+}
+async function fetchText(raw){
+ const first=await safeUrl(raw);let current=first,lastResponse=null;
+ for(let hop=0;hop<4;hop++){
+  const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),25000);
+  try{
+   const r=await fetch(current,{redirect:'manual',signal:ac.signal,headers:{'user-agent':'LOS-COLLECTOR/5.0','accept':'text/html,application/vnd.apple.mpegurl,application/x-mpegurl,text/plain;q=0.9,*/*;q=0.1'}});
+   lastResponse=r;
+   if([301,302,303,307,308].includes(r.status)){const loc=r.headers.get('location');if(!loc)throw Error('Redirecionamento sem destino');current=await safeUrl(new URL(loc,current));continue}
+   if(!r.ok)throw Error('HTTP '+r.status);
+   const text=await r.text();if(text.length>12e6)throw Error('Resposta maior que o limite');
+   return {url:current,text,contentType:r.headers.get('content-type')||''};
+  }finally{clearTimeout(timer)}
+ }
+ throw Error('Muitos redirecionamentos');
+}
+async function fetchSource(raw){
+ const first=await safeUrl(raw),root=await fetchText(first.toString()),isM=/\\.(m3u8?|txt)$/i.test(new URL(root.url).pathname)||/mpegurl/i.test(root.contentType)||root.text.trim().startsWith('#EXTM3U');
+ if(isM){const items=parseM3U(root.text,root.url);return {kind:'m3u',sourceUrl:root.url,items,discovered:1,playlists:[root.url]}}
+ const candidates=htmlItems(root.text,root.url).filter(x=>/\\.(m3u8?|m3u)(?:$|[?#])/i.test(x.streamUrl)).slice(0,25);
+ const collected=[],seen=new Set();let failed=0;
+ for(const c of candidates){
+  try{const p=await fetchText(c.streamUrl),its=parseM3U(p.text,p.url);for(const x of its){if(!seen.has(x.streamUrl)){seen.add(x.streamUrl);collected.push(x)}}}
+  catch{failed++}
+ }
+ const direct=htmlItems(root.text,root.url).filter(x=>!candidates.some(c=>c.streamUrl===x.streamUrl));
+ for(const x of direct)if(!seen.has(x.streamUrl)){seen.add(x.streamUrl);collected.push(x)}
+ return {kind:'website',sourceUrl:root.url,items:collected.slice(0,10000),discovered:candidates.length,failedPlaylists:failed,playlists:candidates.map(x=>x.streamUrl),message:candidates.length?'Playlists M3U/M3U8 descobertas e analisadas.':collected.length?'Streams encontrados na página.':'Nenhuma playlist/stream identificável encontrada.'}
+}
 async function checkUrl(raw){const started=Date.now();try{const u=await safeUrl(raw),ac=new AbortController(),timer=setTimeout(()=>ac.abort(),12000);let r;try{r=await fetch(u,{method:'HEAD',redirect:'manual',signal:ac.signal,headers:{'user-agent':'LOS-COLLECTOR-CHECK/4.0'}});if([301,302,303,307,308].includes(r.status)){const loc=r.headers.get('location');if(loc){const target=new URL(loc,u);await safeUrl(target);r=await fetch(target,{method:'HEAD',redirect:'manual',signal:ac.signal,headers:{'user-agent':'LOS-COLLECTOR-CHECK/4.0'}})}}if(r.status===405||r.status===501)r=await fetch(u,{method:'GET',redirect:'manual',signal:ac.signal,headers:{range:'bytes=0-0','user-agent':'LOS-COLLECTOR-CHECK/4.0'}})}finally{clearTimeout(timer)}return {status:r.ok?'online':'error',httpStatus:r.status,responseMs:Date.now()-started,reason:r.ok?'OK':'HTTP '+r.status}}catch(e){return {status:e.name==='AbortError'?'timeout':'error',responseMs:Date.now()-started,reason:e.name==='AbortError'?'Timeout':e.message}}}
-async function importItems(sourceId,items){for(const x of items){await q('INSERT INTO items(id,source_id,type,name,original_name,group_name,logo,stream_url,status,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[id(),sourceId,x.type,x.name||'Sem nome',x.originalName||x.name||'',x.group||'',x.logo||'',x.streamUrl||'',x.status||'unknown',JSON.stringify(x.metadata||{})])}}
+async function importItems(sourceId,items){
+ const summary={received:items.length,imported:0,failed:0,errors:[]};
+ for(const x of items){
+  try{
+   if(!x.streamUrl)throw Error('Item sem URL');
+   await safeUrl(x.streamUrl);
+   await q('INSERT INTO items(id,source_id,type,name,original_name,group_name,logo,stream_url,status,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[id(),sourceId,x.type||'channel',x.name||'Sem nome',x.originalName||x.name||'',x.group||'',x.logo||'',x.streamUrl,x.status||'unknown',JSON.stringify(x.metadata||{})]);
+   summary.imported++;
+  }catch(e){summary.failed++;if(summary.errors.length<20)summary.errors.push({name:x.name||'Sem nome',url:x.streamUrl||'',error:e.message})}
+ }
+ return summary
+}
 function m3u(items){return '#EXTM3U\n'+items.map(x=>'#EXTINF:-1'+(x.group?' group-title="'+String(x.group).replaceAll('"','&quot;')+'"':'')+(x.logo?' tvg-logo="'+String(x.logo).replaceAll('"','&quot;')+'"':'')+','+(x.name||x.title||'Sem nome')+'\n'+(x.streamUrl||'')).join('\n')}
 async function library(){const [a,s,e]=await Promise.all([q('SELECT id,source_id,type,name,original_name AS "originalName",group_name AS "group",category,country,language,logo,stream_url AS "streamUrl",stream_type AS "streamType",year,genres,description,status,last_verified_at AS "lastVerifiedAt",metadata FROM items ORDER BY created_at DESC LIMIT 5000'),q('SELECT id,source_id,title,original_title AS "originalTitle",year,genres,cover_url AS "coverUrl",description,status,metadata FROM series ORDER BY created_at DESC LIMIT 2000'),q('SELECT id,series_id,source_id,season_id,number,title,description,duration,stream_url AS "streamUrl",status,last_verified_at AS "lastVerifiedAt",metadata FROM episodes ORDER BY number LIMIT 5000')]);return {items:a.rows,series:s.rows,episodes:e.rows}}
 async function dashboard(){const names=['sources','channel','movie','series','episode','online','error'];const sql=['SELECT count(*)::int n FROM sources',"SELECT count(*)::int n FROM items WHERE type='channel'","SELECT count(*)::int n FROM items WHERE type='movie'","SELECT count(*)::int n FROM series","SELECT count(*)::int n FROM episodes","SELECT count(*)::int n FROM items WHERE status='online'","SELECT count(*)::int n FROM items WHERE status IN ('error','timeout')"];const r=await Promise.all(sql.map(x=>q(x)));const v=r.map(x=>x.rows[0].n);return {sources:v[0],channels:v[1],movies:v[2],series:v[3],episodes:v[4],online:v[5],errors:v[6]}}
@@ -32,8 +103,8 @@ if(req.method==='GET'&&p==='/api/auth/me')return json(res,200,{user:{id:uo.id,em
 if(req.method==='POST'&&p==='/api/auth/change-password'){const b=await body(req),old=String(b.currentPassword||''),nw=String(b.newPassword||'');if(nw.length<10)return json(res,400,{error:'Nova senha: mínimo de 10 caracteres'});const r=await q('SELECT password_hash FROM users WHERE id=$1',[uo.id]);if(!(await verify(old,r.rows[0].password_hash)))return json(res,400,{error:'Senha atual inválida'});await q('UPDATE users SET password_hash=$1 WHERE id=$2',[await hash(nw),uo.id]);await q('DELETE FROM sessions WHERE user_id=$1',[uo.id]);return json(res,200,{ok:true})}
 if(req.method==='GET'&&p==='/api/dashboard')return json(res,200,await dashboard());
 if(req.method==='GET'&&p==='/api/sources'){const r=await q("SELECT s.*,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='channel')::int channels,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='movie')::int movies,(SELECT count(*) FROM series x WHERE x.source_id=s.id)::int series,(SELECT count(*) FROM episodes e WHERE e.source_id=s.id)::int episodes FROM sources s ORDER BY created_at DESC");return json(res,200,{items:r.rows})}
-if(req.method==='POST'&&p==='/api/sources'){const b=await body(req),name=String(b.name||'').trim(),url=String(b.url||'').trim();if(!name||!url)return json(res,400,{error:'Nome e URL são obrigatórios'});await safeUrl(url);const sid=id();await q('INSERT INTO sources(id,name,url,type) VALUES($1,$2,$3,$4)',[sid,name,String(b.type||'website')]);if(b.collectNow){try{const c=await fetchSource(url);await importItems(sid,c.items);await q('UPDATE sources SET last_collected_at=now() WHERE id=$1',[sid]);return json(res,201,{source:{id:sid,name,url},collected:c})}catch(e){await q("UPDATE sources SET status='error' WHERE id=$1",[sid]);return json(res,400,{error:'Fonte criada, coleta falhou: '+e.message,sourceId:sid})}}return json(res,201,{source:{id:sid,name,url}})}
-if(req.method==='POST'&&p.match(/^\/api\/sources\/[^/]+\/collect$/)){const sid=p.split('/')[3],r=await q('SELECT * FROM sources WHERE id=$1',[sid]);if(!r.rowCount)return json(res,404,{error:'Fonte não encontrada'});try{const c=await fetchSource(r.rows[0].url);await importItems(sid,c.items);await q('UPDATE sources SET last_collected_at=now(),status=\'active\' WHERE id=$1',[sid]);return json(res,200,{...c,count:c.items.length})}catch(e){await q("UPDATE sources SET status='error' WHERE id=$1",[sid]);return json(res,400,{error:e.message})}}
+if(req.method==='POST'&&p==='/api/sources'){const b=await body(req),name=String(b.name||'').trim(),url=String(b.url||'').trim();if(!name||!url)return json(res,400,{error:'Nome e URL são obrigatórios'});await safeUrl(url);const sid=id();await q('INSERT INTO sources(id,name,url,type) VALUES($1,$2,$3,$4)',[sid,name,String(b.type||'website')]);if(b.collectNow){try{const c=await fetchSource(url),summary=await importItems(sid,c.items);await q('UPDATE sources SET last_collected_at=now(),status=$2 WHERE id=$1',[sid,summary.imported||c.items.length?'active':'warning']);return json(res,201,{source:{id:sid,name,url},collected:{...c,summary}})}catch(e){await q("UPDATE sources SET status='error' WHERE id=$1",[sid]);return json(res,400,{error:'Fonte criada, coleta falhou: '+e.message,sourceId:sid})}}return json(res,201,{source:{id:sid,name,url}})}
+if(req.method==='POST'&&p.match(/^\/api\/sources\/[^/]+\/collect$/)){const sid=p.split('/')[3],r=await q('SELECT * FROM sources WHERE id=$1',[sid]);if(!r.rowCount)return json(res,404,{error:'Fonte não encontrada'});try{const c=await fetchSource(r.rows[0].url),summary=await importItems(sid,c.items);await q('UPDATE sources SET last_collected_at=now(),status=$2 WHERE id=$1',[sid,summary.imported?'active':'warning']);return json(res,200,{...c,count:c.items.length,summary})}catch(e){await q("UPDATE sources SET status='error' WHERE id=$1",[sid]);return json(res,400,{error:e.message})}}
 if(req.method==='DELETE'&&p.match(/^\/api\/sources\/[^/]+$/)){await q('DELETE FROM sources WHERE id=$1',[p.split('/')[3]]);return json(res,200,{ok:true})}
 if(req.method==='GET'&&p==='/api/library'){const d=await library(),s=String(u.searchParams.get('search')||'').toLowerCase(),t=u.searchParams.get('type');if(s||t)d.items=d.items.filter(x=>(!s||x.name.toLowerCase().includes(s))&&(!t||t==='all'||x.type===t));return json(res,200,d)}
 if(req.method==='PATCH'&&p.match(/^\/api\/items\/[^/]+$/)){const item=p.split('/')[3],b=await body(req),map={name:'name',originalName:'original_name',group:'group_name',logo:'logo',streamUrl:'stream_url',description:'description',status:'status',category:'category',country:'country',language:'language',genres:'genres',year:'year',streamType:'stream_type'};for(const k in map)if(Object.hasOwn(b,k))await q('UPDATE items SET '+map[k]+'=$1 WHERE id=$2',[b[k],item]);return json(res,200,{ok:true})}
