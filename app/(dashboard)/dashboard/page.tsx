@@ -1,21 +1,6 @@
-import { query } from '@/lib/db';
-
-export const dynamic = 'force-dynamic';
-
-export default async function Dashboard() {
-  const [s,c,o,e]=await Promise.all([
-    query('SELECT count(*)::int count FROM sources'),
-    query('SELECT count(*)::int count FROM contents'),
-    query("SELECT count(*)::int count FROM contents WHERE status='ONLINE'"),
-    query("SELECT count(*)::int count FROM contents WHERE status IN ('ERRO','TIMEOUT')")
-  ]);
-
-  const stats=[
-    ['FONTES',s.rows[0].count,'Fontes cadastradas'],
-    ['CONTEÚDOS',c.rows[0].count,'Itens na biblioteca'],
-    ['ONLINE',o.rows[0].count,'Último estado conhecido'],
-    ['COM ERRO',e.rows[0].count,'Erro ou timeout']
-  ];
+'use client';
+import {useEffect,useState} from 'react';
+export default function Dashboard(){const [d,setD]=useState<any>(null);useEffect(()=>{fetch('/api/dashboard',{cache:'no-store'}).then(r=>r.json()).then(setD)},[]);const stats=[['FONTES',d?.sources??'—','Fontes cadastradas'],['CONTEÚDOS',d?.contents??'—','Itens na biblioteca'],['ONLINE',d?.online??'—','Último estado conhecido'],['COM ERRO',d?.errors??'—','Erro ou timeout']];
 
   return <>
     <div className="hero"><div><div className="eyebrow">LOS COLLECTOR</div><h1 className="title">Painel operacional</h1><p className="sub">Visão rápida do seu ambiente de coleta e monitoramento.</p></div></div>
