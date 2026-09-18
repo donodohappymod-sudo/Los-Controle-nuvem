@@ -48,7 +48,7 @@ if(req.method==='POST'&&p==='/api/generated'){const b=await body(req),items=Arra
 if(req.method==='GET'&&p.match(/^\/api\/generated\/[^/]+$/)){const r=await q('SELECT content FROM generated_sources WHERE id=$1',[p.split('/')[3]]);if(!r.rowCount)return json(res,404,{error:'Fonte não encontrada'});return send(res,200,'application/x-mpegURL; charset=utf-8',r.rows[0].content)}
 if(req.method==='GET'&&p==='/api/studio')return json(res,200,{items:(await q('SELECT id,title,description,cover_url AS "coverUrl",background_url AS "backgroundUrl",format,duration,status,created_at AS "createdAt" FROM studio_projects ORDER BY created_at DESC')).rows});
 if(req.method==='POST'&&p==='/api/studio'){const b=await body(req),x={id:id(),title:String(b.title||'Projeto sem título'),description:String(b.description||''),coverUrl:String(b.coverUrl||''),backgroundUrl:String(b.backgroundUrl||''),format:b.format==='16:9'?'16:9':'9:16',duration:Math.min(60,Math.max(5,Number(b.duration)||15)),status:'draft'};await q('INSERT INTO studio_projects(id,title,description,cover_url,background_url,format,duration,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',Object.values(x));return json(res,201,x)}
-if(req.method==='POST'&&p.match(/^\\/api\\/studio\\/[^/]+\\/render$/)){
+if(req.method==='POST'&&p.match(/^\/api\/studio\/[^/]+\/render$/)){
 const pid=p.split('/')[3];
 const r=await q('SELECT * FROM studio_projects WHERE id=$1',[pid]);
 if(!r.rowCount)return json(res,404,{error:'Projeto não encontrado'});
