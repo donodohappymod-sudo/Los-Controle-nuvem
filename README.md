@@ -18,4 +18,4 @@ Web platform for collecting, organizing, diagnosing, monitoring, merging and gen
 Never use the collector to bypass authentication, CAPTCHA, DRM, paywalls or anti-bot controls. Only collect content from sources you are authorized to access.
 
 ## Deploy
-Set BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_PASSWORD, SESSION_SECRET and persistent STORAGE_ROOT. Change the initial password after first access.
+Set `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, `SESSION_SECRET` and persistent `STORAGE_ROOT`. The initial password is read from environment variables and is never stored in source code. Change it after first access.
