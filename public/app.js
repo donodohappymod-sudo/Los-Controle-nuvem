@@ -2,7 +2,7 @@
 const esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function api(path,opt={}){const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),20000);try{const r=await fetch(path,{credentials:'same-origin',cache:'no-store',headers:{'content-type':'application/json',...(opt.headers||{})},...opt,signal:ctl.signal});const j=await r.json().catch(()=>({error:'Resposta inválida'}));if(!r.ok)throw Error(j.error||('HTTP '+r.status));return j}catch(e){if(e.name==='AbortError')throw Error('A conexão com o servidor demorou mais de 20 segundos.');throw e}finally{clearTimeout(timer)}}
 function login(msg=''){root.innerHTML='<main class="login"><form id="loginForm" class="login-card"><div class="brand-mark">♛</div><h1>LOS COLLECTOR</h1><p>Collect • Organize • Monitor</p><label>Email<input name="email" type="email" autocomplete="username" required></label><label>Senha<input name="password" type="password" autocomplete="current-password" required></label>'+(msg?'<div class="error">'+esc(msg)+'</div>':'')+'<button class="primary">Entrar</button></form></main>';document.querySelector('#loginForm').onsubmit=async e=>{e.preventDefault();try{await api('/api/auth/login',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});S.user=(await api('/api/auth/me')).user;render()}catch(x){login(x.message)}}}
-const APP_VERSION='20260919-ai1';window.addEventListener('pageshow',e=>{if(e.persisted)location.reload()});const nav=[['home','⌂','Início'],['sources','🌐','Fontes'],['library','▦','Biblioteca'],['diagnosis','🩺','Diagnóstico'],['monitoring','◉','Monitoramento'],['merge','🔀','Mesclar'],['generated','📡','Fontes Geradas'],['studio','✦','Studio'],['settings','⚙','Configurações'],['ai','🧠','AI / Testes']];
+const APP_VERSION='20260919-collector2';window.addEventListener('pageshow',e=>{if(e.persisted)location.reload()});const nav=[['home','⌂','Início'],['sources','🌐','Fontes'],['library','▦','Biblioteca'],['diagnosis','🩺','Diagnóstico'],['monitoring','◉','Monitoramento'],['merge','🔀','Mesclar'],['generated','📡','Fontes Geradas'],['studio','✦','Studio'],['settings','⚙','Configurações'],['ai','🧠','AI / Testes']];
 function shell(){root.innerHTML='<div class="app-shell"><aside><div class="logo"><span>♛</span><div><b>LOS COLLECTOR</b><small>Collect • Organize • Monitor · v${APP_VERSION}</small></div></div><nav>'+nav.map(n=>'<button class="nav '+(S.page===n[0]?'on':'')+'" data-page="'+n[0]+'"><i>'+n[1]+'</i>'+n[2]+'</button>').join('')+'</nav><button class="logout" id="logout">↪ Sair</button></aside><section class="main"><header><button class="mobile-menu" id="menu">☰</button><div><b>'+((nav.find(x=>x[0]===S.page)||['collection','','Varredura'])[2])+'</b><span>'+esc(S.user.email)+'</span></div><div class="status-dot">● online</div></header><div id="view"></div></section></div>';document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>{S.page=b.dataset.page;render()});document.querySelector('#logout').onclick=async()=>{await api('/api/auth/logout',{method:'POST'});S.user=null;login()};document.querySelector('#menu').onclick=()=>document.querySelector('aside').classList.toggle('open')}
 function cards(d){return '<div class="stats">'+[['🌐','Fontes',d.sources],['📺','Canais',d.channels],['🎬','Filmes',d.movies],['📺','Séries',d.series],['🎞️','Episódios',d.episodes],['🟢','Online',d.online],['🔴','Erros',d.errors]].map(x=>'<div class="stat"><span>'+x[0]+'</span><small>'+x[1]+'</small><strong>'+x[2]+'</strong></div>').join('')+'</div>'}
 async function pageHome(){const d=await api('/api/dashboard');return '<div class="hero"><div><small>PAINEL OPERACIONAL</small><h2>Controle sua operação IPTV em um só lugar.</h2><p>Fonte → Coleta → Biblioteca → Diagnóstico → Monitoramento → Mesclar → Gerar.</p></div><button class="primary" data-go="sources">+ Nova fonte</button></div>'+cards(d)+'<div class="grid2"><section class="panel"><h3>Fluxo conectado</h3><div class="flow">'+['Fontes','Coletor','Biblioteca','Diagnóstico','Monitoramento','Mesclar','Fonte IPTV'].map((x,i)=>'<span>'+x+(i<6?' →':'')+'</span>').join('')+'</div></section><section class="panel"><h3>Operação</h3><p class="muted">Todos os módulos usam a mesma base PostgreSQL e a mesma sessão autenticada.</p><button class="btn" data-go="diagnosis">Executar diagnóstico</button></section></div>'}
@@ -23,7 +23,7 @@ async function pageCollection(){
  '<h3>'+esc(j.message)+'</h3><p class="muted">'+j.pagesScanned+' páginas analisadas · '+j.itemsFound+' conteúdos encontrados · '+j.itemsImported+' importados · '+j.errorCount+' erros</p>'+
  (done?'<div class="success-box"><b>Coleta concluída.</b><br>'+esc(j.message)+'</div>':'')+
  (failed?'<div class="error"><b>Coleta interrompida.</b><br>'+esc(j.message)+'</div>':'')+
- (done||failed?'<br><button class="primary" id="finishCollection">Ir para fontes</button>':'<p class="muted">Esta tela atualiza automaticamente a cada 1,5 segundo.</p>')+
+ (done||failed?'<br><button class="primary" id="finishCollection">Ir para fontes</button><button class="mini" id="openLibraryAfterCollection">Abrir biblioteca</button>':'<p class="muted">Esta tela atualiza automaticamente a cada 1,5 segundo.</p>')+
  '</section>';
 }
 async function pageLibrary(){const d=await api('/api/library?search='+encodeURIComponent(S.search||''));return '<div class="toolbar"><div><h2>Biblioteca</h2><p class="muted">Canais, filmes, séries e episódios centralizados.</p></div><input id="search" class="search" placeholder="Buscar..." value="'+esc(S.search||'')+'"></div><div class="tabs">'+['all','channel','movie','series','episode'].map(t=>'<button class="tab '+((S.type||'all')===t?'active':'')+'" data-type="'+t+'">'+({all:'TODOS',channel:'CANAIS',movie:'FILMES',series:'SÉRIES',episode:'EPISÓDIOS'}[t])+'</button>').join('')+'</div><div class="library-grid">'+d.items.concat(d.series.map(x=>({...x,type:'series',name:x.title,logo:x.coverUrl,streamUrl:''})),d.episodes.map(x=>({...x,type:'episode',name:x.title}))).filter(x=>!S.type||S.type==='all'||x.type===S.type).map(x=>'<article class="item"><div class="thumb">'+(x.logo?'<img src="'+esc(x.logo)+'" alt="">':'<span>'+({channel:'📺',movie:'🎬',series:'📺',episode:'🎞️'}[x.type]||'•')+'</span>')+'</div><div><b>'+esc(x.name)+'</b><small>'+esc(x.group||x.description||x.type)+'</small><small class="'+x.status+'">'+esc(x.status||'unknown')+'</small></div><div class="item-actions">'+(x.streamUrl?'<button class="mini copy" data-url="'+esc(x.streamUrl)+'">Copiar</button>':'')+(x.id&&!x.title?'<button class="mini delitem" data-id="'+x.id+'">Excluir</button>':'')+'</div></article>').join('')+'</div>'}
@@ -37,9 +37,20 @@ async function render(){if(!S.user)return login();shell();const view=document.qu
 function modal(html){document.body.insertAdjacentHTML('beforeend',html)}
 function bind(){
 const back=document.querySelector('#backSources');if(back)back.onclick=()=>{S.page='sources';render()};
-const finish=document.querySelector('#finishCollection');if(finish)finish.onclick=()=>{S.collection=null;S.page='sources';render()};
-if(S.page==='collection'&&S.collection){
- const tick=async()=>{try{const j=await api('/api/sources/'+S.collection.sourceId+'/jobs/'+S.collection.jobId);if(j.status!=='done'&&j.status!=='error'){setTimeout(()=>{if(S.page==='collection')render()},1500)}}catch(e){console.error(e)}};
+const finish=document.querySelector('#finishCollection');if(finish)finish.onclick=()=>{S.collection=null;S.page='sources';render()};const libAfter=document.querySelector('#openLibraryAfterCollection');if(libAfter)libAfter.onclick=()=>{S.collection=null;S.page='library';render()};
+if(S.page==='collection'&&S.collection&&!S.collection.finished){
+ const tick=async()=>{try{
+  const j=await api('/api/sources/'+S.collection.sourceId+'/jobs/'+S.collection.jobId);
+  if(j.status==='done'||j.status==='error'){
+   S.collection.finished=true;
+   render();
+   return;
+  }
+  setTimeout(()=>{if(S.page==='collection'&&!S.collection.finished)render()},1500);
+ }catch(e){
+  console.error(e);
+  setTimeout(()=>{if(S.page==='collection'&&!S.collection.finished)render()},2500);
+ }};
  tick();
 }
 document.querySelectorAll('[data-go]').forEach(x=>x.onclick=()=>{S.page=x.dataset.go;render()});const n=document.querySelector('#newSource');
