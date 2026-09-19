@@ -359,7 +359,7 @@ if(req.method==='POST'&&p==='/api/sources'){
  if(!name||!url)return json(res,400,{error:'Nome e URL são obrigatórios'});
  await safeUrl(url);
  const sid=id();
- await q('INSERT INTO sources(id,name,url,type) VALUES($1,$2,$3,$4)',[sid,name,url,type]);
+ await q('INSERT INTO sources(id,user_id,name,url,type) VALUES($1,$2,$3,$4,$5)',[sid,uo.id,name,url,type]);
  if(b.collectNow){
   const jobId=await startCollection(sid);
   return json(res,201,{source:{id:sid,name,url,type},jobId});
