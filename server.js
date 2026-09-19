@@ -115,34 +115,37 @@ function parseM3U(text,baseUrl='',sourceUrl=''){
   if(!line) continue;
   if(/^#EXT-X-TARGETDURATION:/i.test(line)) hasTarget=true;
   if(/^#EXTINF:/i.test(line)){
-   const at=attrs(line),name=line.slice(line.indexOf(',')+1).trim()||at['tvg-name']||'Sem nome';
-   pending={at,name};continue;
+   const at=attrs(line.slice(line.indexOf(':')+1)),name=(line.includes(',')?line.slice(line.indexOf(',')+1).trim():'')||at['tvg-name']||'Sem nome';
+   pending={at,name}; continue;
   }
-  if(/^#EXT-X-STREAM-INF:/i.test(line)){master=attrs(line.slice(line.indexOf(':')+1));masterCount++;continue}
+  if(/^#EXT-X-STREAM-INF:/i.test(line)){master=attrs(line.slice(line.indexOf(':')+1));masterCount++;continue;}
   if(/^#EXT-X-MEDIA:/i.test(line)){
    const at=attrs(line.slice(line.indexOf(':')+1));
    if(at.URI){
     const u=absoluteUrl(at.URI,baseUrl);
-    if(u&&!seen.has(u)){seen.add(u);out.push({type:'channel',name:at.NAME||at['GROUP-ID']||streamNameFromUrl(u),originalName:at.NAME||'',group:at['GROUP-ID']||'',logo:'',streamUrl:u,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'m3u8-rendition',language:at.LANGUAGE||'',sourceUrl}});
+    if(u&&!seen.has(u)){seen.add(u);out.push({type:'channel',name:at.NAME||at['GROUP-ID']||streamNameFromUrl(u),originalName:at.NAME||'',group:at['GROUP-ID']||'',logo:at['URI']?'': '',streamUrl:u,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'m3u8-rendition',language:at.LANGUAGE||'',sourceUrl}});}
    }
+   continue;
   }
-  continue;
+  if(line.startsWith('#')) continue;
+  const url=absoluteUrl(line,baseUrl); if(!url) continue;
+  if(master){
+   if(!seen.has(url)){
+    seen.add(url);
+    const label=master.NAME||((master.RESOLUTION||master.BANDWIDTH)?['HLS',master.RESOLUTION||'',master.BANDWIDTH?Math.round(Number(master.BANDWIDTH)/1000)+'kbps':''].filter(Boolean).join(' '):streamNameFromUrl(url));
+    out.push({type:'channel',name:label,originalName:label,group:'',logo:'',streamUrl:url,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'m3u8-master',bandwidth:master.BANDWIDTH||'',resolution:master.RESOLUTION||'',codecs:master.CODECS||'',sourceUrl}});
+   }
+   master=null; continue;
+  }
+  if(pending){
+   const at=pending.at,name=pending.name,z=((at.type||'')+' '+(at['group-title']||'')+' '+name).toLowerCase();
+   const type=/movie|filme|vod/.test(z)?'movie':/episode|epis[oó]dio|season|temporada/.test(z)?'episode':'channel';
+   if(!seen.has(url)){seen.add(url);out.push({type,name,originalName:name,group:at['group-title']||'',logo:at['tvg-logo']||'',streamUrl:url,status:'unknown',streamType:/\.m3u8(?:$|[?#])/i.test(url)?'m3u8':'stream',metadata:{tvgId:at['tvg-id']||'',language:at['tvg-language']||'',channelId:at['tvg-chno']||'',sourceUrl}});}
+   pending=null; continue;
+  }
+  hasSegments=true;
  }
- if(line.startsWith('#')) continue;
- const url=absoluteUrl(line,baseUrl);if(!url)continue;
- if(master){
-  if(!seen.has(url)){seen.add(url);const label=master.NAME||((master.RESOLUTION||master.BANDWIDTH)?['HLS',master.RESOLUTION||'',master.BANDWIDTH?Math.round(Number(master.BANDWIDTH)/1000)+'kbps':''].filter(Boolean).join(' '):streamNameFromUrl(url));out.push({type:'channel',name:label,originalName:label,group:'',logo:'',streamUrl:url,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'m3u8-master',bandwidth:master.BANDWIDTH||'',resolution:master.RESOLUTION||'',codecs:master.CODECS||'',sourceUrl}})}
-  master=null;continue;
- }
- if(pending){
-  const at=pending.at,name=pending.name,z=((at.type||'')+' '+(at['group-title']||'')+' '+name).toLowerCase();
-  const type=/movie|filme|vod/.test(z)?'movie':/episode|epis[oó]dio|season|temporada/.test(z)?'episode':'channel';
-  if(!seen.has(url)){seen.add(url);out.push({type,name,originalName:name,group:at['group-title']||'',logo:at['tvg-logo']||'',streamUrl:url,status:'unknown',streamType:/\.m3u8(?:$|[?#])/i.test(url)?'m3u8':'stream',metadata:{tvgId:at['tvg-id']||'',language:at['tvg-language']||'',channelId:at['tvg-chno']||'',sourceUrl}})}
-  pending=null;continue;
- }
- hasSegments=true;
- }
- const looksLikeMediaPlaylist=hasTarget||hasSegments&&/#EXT-X-MEDIA-SEQUENCE|#EXT-X-ENDLIST/i.test(String(text));
+ const looksLikeMediaPlaylist=hasTarget||(hasSegments&&/#EXT-X-MEDIA-SEQUENCE|#EXT-X-ENDLIST/i.test(String(text)));
  if(!out.length&&looksLikeMediaPlaylist&&sourceUrl){
   out.push({type:'channel',name:streamNameFromUrl(sourceUrl,'Stream M3U8'),originalName:streamNameFromUrl(sourceUrl,'Stream M3U8'),group:'',logo:'',streamUrl:sourceUrl,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'m3u8-media-playlist',sourceUrl}});
  }
