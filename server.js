@@ -53,6 +53,42 @@ const send=(res,s,t,b,h={})=>{res.writeHead(s,{'content-type':t,'cache-control':
 async function body(req){let s='';for await(const c of req){s+=c;if(s.length>4e6)throw Error('Payload muito grande')}return s?JSON.parse(s):{}}
 const cookie=req=>{const m=(req.headers.cookie||'').match(/(?:^|;\s*)los_session=([^;]+)/);return m&&m[1]},tokenHash=t=>crypto.createHash('sha256').update(t).digest('hex');
 async function auth(req){const t=cookie(req);if(!t)return null;const r=await q('SELECT u.id,u.email,s.token_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()',[tokenHash(t)]);return r.rows[0]||null}
+
+async function fetchText(rawUrl,options={}){
+ const maxBytes=Math.min(20*1024*1024,Math.max(256*1024,Number(options.maxBytes)||8*1024*1024));
+ const timeoutMs=Math.min(30000,Math.max(3000,Number(options.timeoutMs)||15000));
+ let current=await safeUrl(rawUrl);
+ const headers={'user-agent':'LOS-COLLECTOR/5.0 (+public-authorized-crawler)','accept':'text/html,application/xhtml+xml,application/xml,application/vnd.apple.mpegurl,application/x-mpegURL,text/plain,*/*'};
+ for(let hop=0;hop<6;hop++){
+  const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),timeoutMs);
+  try{
+   const r=await fetch(current,{redirect:'manual',signal:ac.signal,headers});
+   if([301,302,303,307,308].includes(r.status)){
+    const loc=r.headers.get('location');
+    if(!loc)throw Error('Redirecionamento sem destino');
+    current=await safeUrl(new URL(loc,current));
+    continue;
+   }
+   if(!r.ok)throw Error('HTTP '+r.status);
+   const len=Number(r.headers.get('content-length')||0);
+   if(len&&len>maxBytes)throw Error('Resposta maior que o limite de '+Math.round(maxBytes/1024/1024)+' MB');
+   const reader=r.body?.getReader();
+   if(!reader){const text=await r.text();if(Buffer.byteLength(text,'utf8')>maxBytes)throw Error('Resposta maior que o limite');return {text,url:current.toString(),contentType:r.headers.get('content-type')||''};}
+   const chunks=[];let total=0;
+   while(true){
+    const part=await reader.read();if(part.done)break;
+    total+=part.value.byteLength;if(total>maxBytes){try{await reader.cancel()}catch{}throw Error('Resposta maior que o limite de '+Math.round(maxBytes/1024/1024)+' MB')}
+    chunks.push(Buffer.from(part.value));
+   }
+   return {text:Buffer.concat(chunks).toString('utf8'),url:current.toString(),contentType:r.headers.get('content-type')||''};
+  }catch(e){
+   if(e.name==='AbortError')throw Error('Timeout ao acessar a página');
+   throw e;
+  }finally{clearTimeout(timer)}
+ }
+ throw Error('Muitos redirecionamentos');
+}
+
 async function safeUrl(raw){const u=new URL(raw);if(!['http:','https:'].includes(u.protocol))throw Error('Somente HTTP/HTTPS');const h=u.hostname.toLowerCase();if(h==='localhost'||h.endsWith('.local')||h.endsWith('.internal'))throw Error('Destino privado bloqueado');const ips=await dns.lookup(h,{all:true}).catch(()=>[]);for(const x of ips){const ip=x.address;if(/^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)||ip==='::1'||/^f[cd]/i.test(ip)||/^fe80:/i.test(ip))throw Error('Destino privado bloqueado')}return u}
 function attrs(s){
  const o={};
@@ -122,91 +158,163 @@ function classifyContent(name,url,meta=''){
  if(/movie|filme|movies|filmes|vod|on[-_ ]?demand/.test(z))return 'movie';
  return 'channel';
 }
+
+function stripHtml(v=''){return String(v).replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim()}
+function htmlEntity(v=''){return String(v).replace(/&amp;/gi,'&').replace(/&quot;/gi,'"').replace(/&#39;/gi,"'").replace(/&nbsp;/gi,' ')}
+function normalizePageUrl(raw,baseUrl){
+ try{
+  const u=new URL(String(raw).trim().replaceAll('\\/','/'),baseUrl),b=new URL(baseUrl);
+  if(!['http:','https:'].includes(u.protocol)||u.hostname!==b.hostname)return '';
+  u.hash='';
+  for(const k of [...u.searchParams.keys()])if(/^utm_|^fbclid$|^gclid$|^ref$/i.test(k))u.searchParams.delete(k);
+  if(/\.(?:jpg|jpeg|png|gif|svg|webp|css|js|ico|woff2?|pdf|zip|rar|xml|json)(?:$|[?#])/i.test(u.pathname))return '';
+  return u.toString();
+ }catch{return ''}
+}
+function pageMeta(text,url){
+ const src=String(text||''),title=(src.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]||src.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1]||'').trim();
+ const ogTitle=src.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1]||'';
+ const description=src.match(/<meta[^>]+(?:name|property)=["'](?:description|og:description)["'][^>]+content=["']([^"']+)["']/i)?.[1]||'';
+ const image=src.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1]||src.match(/<img[^>]+(?:src|data-src)=["']([^"']+)["']/i)?.[1]||'';
+ const clean=htmlEntity(stripHtml(ogTitle||title)).replace(/\s+-\s+Animes Online.*$/i,'').replace(/\s+Todos os Episodios Online.*$/i,'').trim();
+ const year=Number(src.match(/\b(19|20)\d{2}\b/)?.[0]||0)||null;
+ const genres=[...src.matchAll(/href=["']([^"']*\/genero\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)].map(m=>htmlEntity(stripHtml(m[2]))).filter(Boolean).slice(0,20);
+ const p=new URL(url).pathname.toLowerCase();
+ let type='catalog';
+ if(/\/episodio\//.test(p))type='episode';
+ else if(/\/anime\//.test(p))type='series';
+ else if(/\/filme\//.test(p)||/\/movie\//.test(p))type='movie';
+ const ep=(src+' '+url).match(/\bepis[oó]dio\s*[-#:]?\s*(\d{1,4})\b/i)?.[1];
+ const season=(src+' '+url).match(/\btemporada\s*[-#:]?\s*(\d{1,3})\b/i)?.[1];
+ let seriesUrl='';
+ const sm=src.match(/href=["']([^"']*\/anime\/[^"']+)["'][^>]*>/i);if(sm)seriesUrl=normalizePageUrl(sm[1],url);
+ let seriesTitle='';
+ if(seriesUrl){try{seriesTitle=decodeURIComponent(new URL(seriesUrl).pathname.split('/').filter(Boolean).pop()||'').replace(/[-_]+/g,' ').replace(/\b\w/g,x=>x.toUpperCase())}catch{}}
+ if(type==='episode'&&!seriesTitle){
+  const m=clean.match(/^(.*?)\s+epis[oó]dio\s+\d+/i);if(m)seriesTitle=m[1].trim();
+ }
+ const media=[];
+ for(const m of src.matchAll(/(?:src|data-src|data-url|href)=["']([^"']+)["']/gi)){
+  const u=absoluteUrl(m[1],url);if(u&&classifyMediaUrl(u,m[0]))media.push(u);
+ }
+ return {title:clean||streamNameFromUrl(url,'Conteúdo'),description:htmlEntity(stripHtml(description)),image:absoluteUrl(image,url),year,genres:[...new Set(genres)],type,episodeNumber:Number(ep||0)||null,seasonNumber:Number(season||1)||1,seriesUrl,seriesTitle:seriesTitle||clean.replace(/\s+epis[oó]dio.*$/i,'').trim(),media:[...new Set(media)]};
+}
 function htmlItems(text,baseUrl){
- const src=String(text||'').replaceAll('\\/','/').replace(/&amp;/gi,'&'),out=[],seen=new Set(),pages=[];
- const addMedia=(raw,meta='',kind='website')=>{
-  const u=absoluteUrl(raw,baseUrl);if(!u||seen.has(u)||seen.size>=1000)return;
-  if(!/^https?:/i.test(u))return;
-  const streamType=classifyMediaUrl(u,meta);
-  const likely=streamType||/(stream|live|playlist|video|movie|episode|channel|tv|iptv|media|manifest)/i.test(u+' '+meta);
-  if(!likely)return;
+ const src=String(text||'').replaceAll('\\/','/').replace(/&amp;/gi,'&'),out=[],seen=new Set(),pages=[],meta=pageMeta(src,baseUrl);
+ const addPage=(raw,priority=0)=>{
+  const u=normalizePageUrl(raw,baseUrl);if(!u)return;
+  const score=priority||(/\/(anime|episodio|temporada|genero|dublado|legendado|lancamento|ano|page|pagina)\b/i.test(new URL(u).pathname)?5:1);
+  pages.push({url:u,score});
+ };
+ const addMedia=(raw,metaText='',kind='website')=>{
+  const u=absoluteUrl(raw,baseUrl);if(!u||seen.has(u)||seen.size>=2000||!/^https?:/i.test(u))return;
+  const streamType=classifyMediaUrl(u,metaText);
+  if(!streamType)return;
   seen.add(u);
-  const n=streamNameFromUrl(u,'Conteúdo encontrado');
-  out.push({type:classifyContent(n,u,meta),name:n,originalName:n,group:'',logo:'',streamUrl:u,status:'unknown',streamType:streamType||'stream',metadata:{discoveredFrom:kind,context:meta.slice(0,500)}});
+  out.push({type:classifyContent(meta.title,u,metaText),name:streamNameFromUrl(u,'Conteúdo encontrado'),originalName:meta.title||'',group:'',logo:meta.image||'',streamUrl:u,status:'unknown',streamType,metadata:{discoveredFrom:kind,context:metaText.slice(0,500),sourcePage:baseUrl}});
  };
- const addPage=(raw)=>{
-  const u=absoluteUrl(raw,baseUrl);if(!u||!/^https?:/i.test(u))return;
-  try{const x=new URL(u),base=new URL(baseUrl);if(x.hostname!==base.hostname)return;if(/\.(?:jpg|jpeg|png|gif|svg|css|js|ico|woff2?|pdf|zip)(?:$|[?#])/i.test(x.pathname))return;pages.push(x.toString())}catch{}
- };
- for(const m of src.matchAll(/(?:href|src|data-src|data-url|data-href|content)\s*=\s*["']([^"']+)["']/gi)){
+ for(const m of src.matchAll(/(?:href|src|data-src|data-url|data-href|content)=["']([^"']+)["']/gi)){
   const raw=m[1],tag=m[0].toLowerCase();
-  if(/href|data-href/.test(tag))addPage(raw);
+  if(/href|data-href/.test(tag))addPage(raw,/\/(?:anime|episodio|temporada|genero|dublado|legendado|lancamento|ano|page|pagina)\//i.test(raw)?8:1);
   addMedia(raw,tag,'html-attribute');
  }
  for(const m of src.matchAll(/https?:\/\/[^\s"'<>\\)]+/gi))addMedia(m[0],'absolute-url','html');
  for(const m of src.matchAll(/(?:^|["'\s])(\/?[^"'\s<>]+\.(?:m3u8?|m3u|mp4|m4v|webm|mov|mkv|ts|mpd)(?:\?[^"'\s<>]*)?)/gi))addMedia(m[1],'extension','embedded-url');
  for(const m of src.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi))addMedia(m[1],'css-url','css');
- return {items:out,pages:[...new Set(pages)]};
+ if(meta.media.length)for(const u of meta.media)addMedia(u,'page-media','metadata');
+ const catalogType=meta.type;
+ if(catalogType==='series'||catalogType==='episode'||catalogType==='movie'){
+  out.push({type:catalogType,name:meta.title,originalName:meta.title,group:meta.genres.join(', '),logo:meta.image,streamUrl:meta.media[0]||'',status:'unknown',streamType:meta.media[0]?classifyMediaUrl(meta.media[0],''):'catalog',metadata:{discoveredFrom:'catalog-page',sourcePage:baseUrl,description:meta.description,year:meta.year,genres:meta.genres,episodeNumber:meta.episodeNumber,seasonNumber:meta.seasonNumber,seriesUrl:meta.seriesUrl,seriesTitle:meta.seriesTitle}});
+ }
+ return {items:out,pages:[...new Map(pages.map(x=>[x.url,x])).values()].sort((a,b)=>b.score-a.score).map(x=>x.url),meta};
 }
 async function crawlWebsite(rootUrl,options={}){
- const maxPages=Math.min(100,Math.max(5,Number(options.maxPages)||50)),maxDepth=Math.min(3,Math.max(0,Number(options.maxDepth)||2));
+ const maxPages=Math.min(2500,Math.max(20,Number(options.maxPages)||1200)),maxDepth=Math.min(6,Math.max(0,Number(options.maxDepth)||5)),concurrency=Math.min(8,Math.max(2,Number(options.concurrency)||6));
  const root=new URL(rootUrl),queue=[{url:root.toString(),depth:0}],queued=new Set([root.toString()]),visited=new Set(),items=[],seenItems=new Set(),playlists=new Set(),errors=[];
+ const emit=typeof options.onProgress==='function'?options.onProgress:()=>{};
+ let lastEmit=0;
+ const addItems=(arr)=>{for(const x of arr){const key=(x.type||'')+'|'+(x.streamUrl||x.name||'').toLowerCase()+'|'+(x.metadata?.sourcePage||'');if(seenItems.has(key))continue;seenItems.add(key);items.push(x);if(x.streamType==='m3u8')playlists.add(x.streamUrl)}};
  async function worker(){
-  while(queue.length){
-   const job=queue.shift();if(!job||visited.has(job.url)||job.depth>maxDepth)continue;
+  while(true){
+   const job=queue.shift();if(!job)break;
+   if(visited.has(job.url)||job.depth>maxDepth)continue;
    visited.add(job.url);
    try{
     const r=await fetchText(job.url),parsed=htmlItems(r.text,r.url);
-    for(const x of parsed.items){
-     const key=(x.streamUrl||'').toLowerCase();if(!key||seenItems.has(key))continue;
-     seenItems.add(key);items.push(x);if(x.streamType==='m3u8')playlists.add(x.streamUrl);
-    }
-    if(visited.size<maxPages)for(const p of parsed.pages){
-     if(visited.has(p)||queued.has(p)||queue.length+visited.size>=maxPages)continue;
+    addItems(parsed.items);
+    for(const p of parsed.pages){
+     if(visited.has(p)||queued.has(p)||visited.size+queue.length>=maxPages)continue;
      queued.add(p);queue.push({url:p,depth:job.depth+1});
     }
-   }catch(e){if(errors.length<30)errors.push({url:job.url,error:e.message})}
+   }catch(e){if(errors.length<100)errors.push({url:job.url,error:e.message})}
+   const ts=Date.now();if(ts-lastEmit>500){lastEmit=ts;emit({pagesScanned:visited.size,pagesQueued:queued.size,itemsFound:items.length,errors:errors.length,message:'Varredura: '+visited.size+' página(s), '+items.length+' conteúdo(s) encontrado(s).'});}
   }
  }
- await Promise.all(Array.from({length:Math.min(5,maxPages)},worker));
+ await Promise.all(Array.from({length:concurrency},worker));
  const playlistItems=[];
- for(const u of playlists){
-  try{
-   const r=await fetchText(u),parsed=parseM3U(r.text,r.url,u);
-   for(const x of parsed.items){const k=(x.streamUrl||'').toLowerCase();if(k&&!seenItems.has(k)){seenItems.add(k);playlistItems.push(x)}}
-  }catch(e){if(errors.length<30)errors.push({url:u,error:'Playlist: '+e.message})}
+ for(const u of playlists.slice(0,500)){
+  try{const r=await fetchText(u),parsed=parseM3U(r.text,r.url,u);addItems(parsed.items);playlistItems.push(...parsed.items)}
+  catch(e){if(errors.length<100)errors.push({url:u,error:'Playlist: '+e.message})}
  }
- const finalItems=[...items,...playlistItems].slice(0,10000);
- return {kind:'website',sourceUrl:rootUrl,items:finalItems,pagesScanned:visited.size,pagesQueued:queued.size,playlistsFound:playlists.size,errors,discovered:finalItems.length,message:'Varredura concluída: '+visited.size+' página(s), '+playlists.size+' playlist(s) e '+finalItems.length+' conteúdo(s) identificado(s).'};
+ emit({pagesScanned:visited.size,pagesQueued:queued.size,itemsFound:items.length,errors:errors.length,message:'Varredura concluída.'});
+ const finalItems=items.slice(0,20000);
+ const counts=finalItems.reduce((a,x)=>{a[x.type]=(a[x.type]||0)+1;return a}, {});
+ return {kind:'website',sourceUrl:rootUrl,items:finalItems,pagesScanned:visited.size,pagesQueued:queued.size,playlistsFound:playlists.size,errors,discovered:finalItems.length,counts,message:'Varredura concluída: '+visited.size+' página(s), '+playlists.size+' playlist(s) e '+finalItems.length+' conteúdo(s) identificado(s).'};
 }
-async function fetchSource(raw,requestedType='website'){
+async function fetchSource(raw,requestedType='website',onProgress=()=>{}){
  const sourceUrl=String(raw||'').trim();if(!sourceUrl)throw Error('URL da fonte é obrigatória');
- const type=String(requestedType||'website').toLowerCase(),root=await fetchText(sourceUrl),pathName=new URL(root.url).pathname.toLowerCase(),text=root.text||'';
+ const type=String(requestedType||'auto').toLowerCase(),root=await fetchText(sourceUrl),text=root.text||'';
  const detectedM3U=/\.(?:m3u8?|m3u)(?:$|[?#])/i.test(root.url)||/mpegurl|x-mpegurl/i.test(root.contentType)||/^\s*#EXTM3U/i.test(text)||/^\s*#EXT-X-(STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)/i.test(text);
  if(type==='auto'||type==='m3u'||type==='m3u8'||detectedM3U){
   const parsed=parseM3U(text,root.url,root.url);
   if(parsed.items.length)return {kind:'m3u',sourceUrl:root.url,items:parsed.items,discovered:parsed.items.length,playlists:[root.url],pagesScanned:1,errors:[],message:parsed.isMaster?'Playlist HLS mestre analisada.':parsed.isMedia?'Stream HLS identificado.':'Playlist M3U/M3U8 analisada.'};
-  if(type==='m3u8'||/m3u8/i.test(root.url)||/mpegurl|x-mpegurl/i.test(root.contentType)){
-   const n=streamNameFromUrl(root.url,'Stream M3U8');
-   return {kind:'m3u8',sourceUrl:root.url,items:[{type:'channel',name:n,originalName:n,group:'',logo:'',streamUrl:root.url,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'direct-m3u8'}}],discovered:1,playlists:[root.url],pagesScanned:1,errors:[],message:'Stream M3U8 direto identificado.'};
-  }
+  if(type==='m3u8'||/m3u8/i.test(root.url)||/mpegurl|x-mpegurl/i.test(root.contentType))return {kind:'m3u8',sourceUrl:root.url,items:[{type:'channel',name:streamNameFromUrl(root.url,'Stream M3U8'),originalName:streamNameFromUrl(root.url,'Stream M3U8'),group:'',logo:'',streamUrl:root.url,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'direct-m3u8'}}],discovered:1,playlists:[root.url],pagesScanned:1,errors:[],message:'Stream M3U8 direto identificado.'};
  }
- return crawlWebsite(root.url,{maxPages:50,maxDepth:2});
+ return crawlWebsite(root.url,{maxPages:Math.min(2500,Number(process.env.CRAWLER_MAX_PAGES)||1200),maxDepth:Math.min(6,Number(process.env.CRAWLER_MAX_DEPTH)||5),concurrency:6,onProgress});
 }
 
+
 async function checkUrl(raw){const started=Date.now();try{const u=await safeUrl(raw),ac=new AbortController(),timer=setTimeout(()=>ac.abort(),12000);let r;try{r=await fetch(u,{method:'HEAD',redirect:'manual',signal:ac.signal,headers:{'user-agent':'LOS-COLLECTOR-CHECK/4.0'}});if([301,302,303,307,308].includes(r.status)){const loc=r.headers.get('location');if(loc){const target=new URL(loc,u);await safeUrl(target);r=await fetch(target,{method:'HEAD',redirect:'manual',signal:ac.signal,headers:{'user-agent':'LOS-COLLECTOR-CHECK/4.0'}})}}if(r.status===405||r.status===501)r=await fetch(u,{method:'GET',redirect:'manual',signal:ac.signal,headers:{range:'bytes=0-0','user-agent':'LOS-COLLECTOR-CHECK/4.0'}})}finally{clearTimeout(timer)}return {status:r.ok?'online':'error',httpStatus:r.status,responseMs:Date.now()-started,reason:r.ok?'OK':'HTTP '+r.status}}catch(e){return {status:e.name==='AbortError'?'timeout':'error',responseMs:Date.now()-started,reason:e.name==='AbortError'?'Timeout':e.message}}}
+
 async function importItems(sourceId,items){
- const summary={received:items.length,imported:0,failed:0,errors:[]};
+ const summary={received:items.length,imported:0,failed:0,series:0,episodes:0,channels:0,movies:0,errors:[]};
+ const seriesCache=new Map();
  for(const x of items){
   try{
-   if(!x.streamUrl)throw Error('Item sem URL');
+   const type=x.type||'channel',md=x.metadata||{};
+   if(type==='series'){
+    const key=String(x.name||'Sem título').trim().toLowerCase();
+    let sr=seriesCache.get(key);
+    if(!sr){sr=await q('SELECT id FROM series WHERE source_id=$1 AND lower(title)=lower($2) LIMIT 1',[sourceId,x.name||'Sem título']);if(sr.rowCount)seriesCache.set(key,sr.rows[0].id)}
+    if(!sr){const sid=id();await q('INSERT INTO series(id,source_id,title,year,genres,cover_url,description,status,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[sid,sourceId,x.name||'Sem título',md.year||null,Array.isArray(md.genres)?md.genres.join(', '):x.group||'',x.logo||'',md.description||'',x.status||'unknown',JSON.stringify(md)]);seriesCache.set(key,sid);sr=sid}
+    summary.series++;summary.imported++;continue;
+   }
+   if(type==='episode'){
+    const seriesTitle=String(md.seriesTitle||x.originalName||x.name||'Série desconhecida').replace(/\s+epis[oó]dio.*$/i,'').trim()||'Série desconhecida';
+    const skey=seriesTitle.toLowerCase();
+    let seriesId=seriesCache.get(skey);
+    if(!seriesId){const sr=await q('SELECT id FROM series WHERE source_id=$1 AND lower(title)=lower($2) LIMIT 1',[sourceId,seriesTitle]);if(sr.rowCount)seriesId=sr.rows[0].id}
+    if(!seriesId){seriesId=id();await q('INSERT INTO series(id,source_id,title,status,metadata) VALUES($1,$2,$3,$4,$5)',[seriesId,sourceId,seriesTitle,'unknown',JSON.stringify({discoveredFrom:'episode-page'})]);}
+    seriesCache.set(skey,seriesId);
+    const seasonNo=Math.max(1,Number(md.seasonNumber)||1),epNo=Math.max(1,Number(md.episodeNumber)||1);
+    let ss=await q('SELECT id FROM seasons WHERE series_id=$1 AND number=$2 LIMIT 1',[seriesId,seasonNo]);
+    let seasonId=ss.rowCount?ss.rows[0].id:id();
+    if(!ss.rowCount)await q('INSERT INTO seasons(id,series_id,number) VALUES($1,$2,$3)',[seasonId,seriesId,seasonNo]);
+    const dup=await q('SELECT id FROM episodes WHERE source_id=$1 AND series_id=$2 AND season_id=$3 AND number=$4 LIMIT 1',[sourceId,seriesId,seasonId,epNo]);
+    if(!dup.rowCount)await q('INSERT INTO episodes(id,series_id,season_id,source_id,number,title,description,duration,stream_url,status,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',[id(),seriesId,seasonId,sourceId,epNo,x.name||('Episódio '+epNo),md.description||'',md.duration||'',x.streamUrl||'',x.status||'unknown',JSON.stringify(md)]);
+    summary.episodes++;summary.imported++;continue;
+   }
+   if(!x.streamUrl)throw Error('Item sem URL de mídia');
    await safeUrl(x.streamUrl);
-   await q('INSERT INTO items(id,source_id,type,name,original_name,group_name,logo,stream_url,status,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[id(),sourceId,x.type||'channel',x.name||'Sem nome',x.originalName||x.name||'',x.group||'',x.logo||'',x.streamUrl,x.status||'unknown',JSON.stringify(x.metadata||{})]);
-   summary.imported++;
-  }catch(e){summary.failed++;if(summary.errors.length<20)summary.errors.push({name:x.name||'Sem nome',url:x.streamUrl||'',error:e.message})}
+   const dup=await q('SELECT id FROM items WHERE source_id=$1 AND lower(stream_url)=lower($2) LIMIT 1',[sourceId,x.streamUrl]);
+   if(dup.rowCount)continue;
+   await q('INSERT INTO items(id,source_id,type,name,original_name,group_name,logo,stream_url,status,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[id(),sourceId,type,x.name||'Sem nome',x.originalName||x.name||'',x.group||'',x.logo||'',x.streamUrl,x.status||'unknown',JSON.stringify(md)]);
+   summary[type==='movie'?'movies':'channels']++;summary.imported++;
+  }catch(e){summary.failed++;if(summary.errors.length<30)summary.errors.push({name:x.name||'Sem nome',url:x.streamUrl||'',error:e.message})}
  }
  return summary
 }
+
 function m3u(items){return '#EXTM3U\n'+items.map(x=>'#EXTINF:-1'+(x.group?' group-title="'+String(x.group).replaceAll('"','&quot;')+'"':'')+(x.logo?' tvg-logo="'+String(x.logo).replaceAll('"','&quot;')+'"':'')+','+(x.name||x.title||'Sem nome')+'\n'+(x.streamUrl||'')).join('\n')}
 async function library(){const [a,s,e]=await Promise.all([q('SELECT id,source_id,type,name,original_name AS "originalName",group_name AS "group",category,country,language,logo,stream_url AS "streamUrl",stream_type AS "streamType",year,genres,description,status,last_verified_at AS "lastVerifiedAt",metadata FROM items ORDER BY created_at DESC LIMIT 5000'),q('SELECT id,source_id,title,original_title AS "originalTitle",year,genres,cover_url AS "coverUrl",description,status,metadata FROM series ORDER BY created_at DESC LIMIT 2000'),q('SELECT id,series_id,source_id,season_id,number,title,description,duration,stream_url AS "streamUrl",status,last_verified_at AS "lastVerifiedAt",metadata FROM episodes ORDER BY number LIMIT 5000')]);return {items:a.rows,series:s.rows,episodes:e.rows}}
 async function dashboard(){const names=['sources','channel','movie','series','episode','online','error'];const sql=['SELECT count(*)::int n FROM sources',"SELECT count(*)::int n FROM items WHERE type='channel'","SELECT count(*)::int n FROM items WHERE type='movie'","SELECT count(*)::int n FROM series","SELECT count(*)::int n FROM episodes","SELECT count(*)::int n FROM items WHERE status='online'","SELECT count(*)::int n FROM items WHERE status IN ('error','timeout')"];const r=await Promise.all(sql.map(x=>q(x)));const v=r.map(x=>x.rows[0].n);return {sources:v[0],channels:v[1],movies:v[2],series:v[3],episodes:v[4],online:v[5],errors:v[6]}}
@@ -220,11 +328,11 @@ async function startCollection(sourceId){
    const src=sr.rows[0];
    await q("UPDATE collection_jobs SET status='running',stage='fetching',progress=5,message='Conectando à fonte...',updated_at=now() WHERE id=$1",[jobId]);
    console.log('[COLLECTOR] start',jobId,src.url);
-   const c=await fetchSource(src.url,src.type);
+   const c=await fetchSource(src.url,src.type,p=>q("UPDATE collection_jobs SET stage='crawling',progress=$2,message=$3,pages_scanned=$4,items_found=$5,error_count=$6,updated_at=now() WHERE id=$1",[jobId,Math.min(70,5+Math.min(65,Math.floor((p.pagesScanned/Math.max(1,p.pagesQueued))*65))),p.message,p.pagesScanned,p.itemsFound,p.errors]).catch(()=>{}));
    await q("UPDATE collection_jobs SET stage='importing',progress=75,message=$2,pages_scanned=$3,items_found=$4,error_count=$5,updated_at=now() WHERE id=$1",[jobId,c.message||'Importando conteúdo...',c.pagesScanned||1,c.items?.length||0,c.errors?.length||0]);
    const summary=await importItems(sourceId,c.items||[]);
    const result={...c,summary};
-   await q("UPDATE collection_jobs SET status='done',stage='complete',progress=100,message=$2,pages_scanned=$3,items_found=$4,items_imported=$5,error_count=$6,result=$7,updated_at=now() WHERE id=$1",[jobId,c.message||'Coleta concluída.',c.pagesScanned||1,c.items?.length||0,summary.imported,summary.failed+(c.errors?.length||0),JSON.stringify(result)]);
+   await q("UPDATE collection_jobs SET status='done',stage='complete',progress=100,message=$2,pages_scanned=$3,items_found=$4,items_imported=$5,error_count=$6,result=$7,updated_at=now() WHERE id=$1",[jobId,(c.message||'Coleta concluída.')+' '+summary.series+' séries, '+summary.episodes+' episódios, '+summary.channels+' canais, '+summary.movies+' filmes.',c.pagesScanned||1,c.items?.length||0,summary.imported,summary.failed+(c.errors?.length||0),JSON.stringify(result)]);
    await q("UPDATE sources SET last_collected_at=now(),content_count=$2,last_error=$3,status=$4,updated_at=now() WHERE id=$1",[sourceId,summary.imported,summary.failed?JSON.stringify(summary.errors.slice(0,5)):'',summary.imported||c.items.length?'active':'warning']);
    console.log('[COLLECTOR] done',jobId,summary.imported,'/',summary.received);
   }catch(e){
