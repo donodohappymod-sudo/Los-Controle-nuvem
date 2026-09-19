@@ -355,14 +355,14 @@ if(req.method==='POST'&&p==='/api/auth/change-password'){const b=await body(req)
 if(req.method==='GET'&&p==='/api/dashboard')return json(res,200,await dashboard());
 if(req.method==='GET'&&p==='/api/sources'){const r=await q("SELECT s.*,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='channel')::int channels,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='movie')::int movies,(SELECT count(*) FROM series x WHERE x.source_id=s.id)::int series,(SELECT count(*) FROM episodes e WHERE e.source_id=s.id)::int episodes FROM sources s ORDER BY created_at DESC");return json(res,200,{items:r.rows})}
 if(req.method==='POST'&&p==='/api/sources'){
- const b=await body(req),name=String(b.name||'').trim(),url=String(b.url||'').trim(),type=String(b.type||'auto').toLowerCase();
+ const b=await body(req),name=String(b.name||'').trim(),url=String(b.url||'').trim(),type=String(b.type||'auto').toLowerCase(); console.log('[SOURCE] request',uo.email,name,url,type,'collectNow=',!!b.collectNow);
  if(!name||!url)return json(res,400,{error:'Nome e URL são obrigatórios'});
  await safeUrl(url);
+ console.log('[SOURCE] url validated',url);
  const sid=id();
- await q('INSERT INTO sources(id,user_id,name,url,type) VALUES($1,$2,$3,$4,$5)',[sid,uo.id,name,url,type]);
+ await q('INSERT INTO sources(id,user_id,name,url,type) VALUES($1,$2,$3,$4,$5)',[sid,uo.id,name,url,type]); console.log('[SOURCE] created',sid);
  if(b.collectNow){
-  const jobId=await startCollection(sid);
-  return json(res,201,{source:{id:sid,name,url,type},jobId});
+  const jobId=await startCollection(sid); console.log('[SOURCE] collection queued',sid,jobId); return json(res,201,{source:{id:sid,name,url,type},jobId});
  }
  return json(res,201,{source:{id:sid,name,url,type}});
 }
