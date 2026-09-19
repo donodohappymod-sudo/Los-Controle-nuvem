@@ -52,7 +52,7 @@ async function auth(req){const t=cookie(req);if(!t)return null;const r=await q('
 async function safeUrl(raw){const u=new URL(raw);if(!['http:','https:'].includes(u.protocol))throw Error('Somente HTTP/HTTPS');const h=u.hostname.toLowerCase();if(h==='localhost'||h.endsWith('.local')||h.endsWith('.internal'))throw Error('Destino privado bloqueado');const ips=await dns.lookup(h,{all:true}).catch(()=>[]);for(const x of ips){const ip=x.address;if(/^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)||ip==='::1'||/^f[cd]/i.test(ip)||/^fe80:/i.test(ip))throw Error('Destino privado bloqueado')}return u}
 function attrs(s){
  const o={};
- for(const m of String(s||'').matchAll(/([\\w-]+)\\s*=\\s*("([^"]*)"|'([^']*)'|([^,\\s]+))/g)) o[m[1]]=(m[3]??m[4]??m[5]??'').trim();
+ for(const m of String(s||'').matchAll(/([\w-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^,\s]+))/g)) o[m[1]]=(m[3]??m[4]??m[5]??'').trim();
  return o;
 }
 function absoluteUrl(raw,base){
@@ -60,19 +60,18 @@ function absoluteUrl(raw,base){
 }
 function streamNameFromUrl(raw,fallback='Stream detectado'){
  try{
-  const u=new URL(raw),n=decodeURIComponent(u.pathname.split('/').pop()||'').replace(/[-_]+/g,' ').replace(/\\.[^.]+$/,'').trim();
+  const u=new URL(raw),n=decodeURIComponent(u.pathname.split('/').pop()||'').replace(/[-_]+/g,' ').replace(/\.[^.]+$/,'').trim();
   return n||fallback;
  }catch{return fallback}
 }
 function parseM3U(text,baseUrl='',sourceUrl=''){
- const lines=String(text||'').replace(/^\\uFEFF/,'').split(/\\r?\\n/);
+ const lines=String(text||'').replace(/^\uFEFF/,'').split(/\r?\n/);
  const out=[],seen=new Set();let pending=null,master=null,masterCount=0,hasTarget=false,hasSegments=false;
  for(const rawLine of lines){
   const line=rawLine.trim();
   if(!line) continue;
   if(/^#EXT-X-TARGETDURATION:/i.test(line)) hasTarget=true;
   if(/^#EXTINF:/i.test(line)){
-   if(/^#EXT-X-/i.test(line)) continue;
    const at=attrs(line),name=line.slice(line.indexOf(',')+1).trim()||at['tvg-name']||'Sem nome';
    pending={at,name};continue;
   }
@@ -95,12 +94,12 @@ function parseM3U(text,baseUrl='',sourceUrl=''){
  if(pending){
   const at=pending.at,name=pending.name,z=((at.type||'')+' '+(at['group-title']||'')+' '+name).toLowerCase();
   const type=/movie|filme|vod/.test(z)?'movie':/episode|epis[oó]dio|season|temporada/.test(z)?'episode':'channel';
-  if(!seen.has(url)){seen.add(url);out.push({type,name,originalName:name,group:at['group-title']||'',logo:at['tvg-logo']||'',streamUrl:url,status:'unknown',streamType:/\\.m3u8(?:$|[?#])/i.test(url)?'m3u8':'stream',metadata:{tvgId:at['tvg-id']||'',language:at['tvg-language']||'',channelId:at['tvg-chno']||'',sourceUrl}})}
+  if(!seen.has(url)){seen.add(url);out.push({type,name,originalName:name,group:at['group-title']||'',logo:at['tvg-logo']||'',streamUrl:url,status:'unknown',streamType:/\.m3u8(?:$|[?#])/i.test(url)?'m3u8':'stream',metadata:{tvgId:at['tvg-id']||'',language:at['tvg-language']||'',channelId:at['tvg-chno']||'',sourceUrl}})}
   pending=null;continue;
  }
  hasSegments=true;
  }
- const looksLikeMediaPlaylist=hasTarget||hasSegments&&/\\#EXT-X-MEDIA-SEQUENCE|\\#EXT-X-ENDLIST/i.test(String(text));
+ const looksLikeMediaPlaylist=hasTarget||hasSegments&&/#EXT-X-MEDIA-SEQUENCE|#EXT-X-ENDLIST/i.test(String(text));
  if(!out.length&&looksLikeMediaPlaylist&&sourceUrl){
   out.push({type:'channel',name:streamNameFromUrl(sourceUrl,'Stream M3U8'),originalName:streamNameFromUrl(sourceUrl,'Stream M3U8'),group:'',logo:'',streamUrl:sourceUrl,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'m3u8-media-playlist',sourceUrl}});
  }
@@ -111,17 +110,17 @@ function htmlItems(text,baseUrl){
  const add=(raw,kind='website')=>{
   const u=absoluteUrl(raw,baseUrl);if(!u||seen.has(u)||seen.size>=200)return;
   if(!/^(https?):/i.test(u))return;
-  const isPlaylist=/\\.(m3u8?|m3u)(?:$|[?#])/i.test(u)||/[?&](?:format|type)=(?:m3u8?|m3u)/i.test(u);
-  const isMedia=/\\.(mp4|mkv|ts|mpd)(?:$|[?#])/i.test(u);
+  const isPlaylist=/\.(m3u8?|m3u)(?:$|[?#])/i.test(u)||/[?&](?:format|type)=(?:m3u8?|m3u)/i.test(u);
+  const isMedia=/\.(mp4|mkv|ts|mpd)(?:$|[?#])/i.test(u);
   const isLikely=/(stream|live|playlist|video|movie|episode|channel|tv|iptv)/i.test(u);
   if(kind==='playlist'||isPlaylist||isMedia||isLikely){
    seen.add(u);const n=streamNameFromUrl(u);
    out.push({type:/movie|filme/i.test(n)?'movie':'channel',name:n,originalName:n,group:'',logo:'',streamUrl:u,status:'unknown',streamType:isPlaylist?'m3u8':'stream',metadata:{discoveredFrom:'website',kind:isPlaylist?'playlist':kind}});
   }
  };
- for(const m of src.matchAll(/(?:href|src|data-src|data-url|content)\\s*=\\s*["']([^"']+)["']/gi))add(m[1]);
- for(const m of src.matchAll(/https?:\\/\\/[^\\s"'<>]+/gi))add(m[0]);
- for(const m of src.matchAll(/(?:^|["'\\s])(\\/?[^"'\\s<>]+\\.(?:m3u8?|m3u)(?:\\?[^"'\\s<>]*)?)/gi))add(m[1],'playlist');
+ for(const m of src.matchAll(/(?:href|src|data-src|data-url|content)\s*=\s*["']([^"']+)["']/gi))add(m[1]);
+ for(const m of src.matchAll(/https?:\/\/[^\s"'<>]+/gi))add(m[0]);
+ for(const m of src.matchAll(/(?:^|["'\s])(\/?[^"'\s<>]+\.(?:m3u8?|m3u)(?:\?[^"'\s<>]*)?)/gi))add(m[1],'playlist');
  return out;
 }
 async function fetchText(raw){
@@ -141,23 +140,21 @@ async function fetchText(raw){
 async function fetchSource(raw,requestedType='website'){
  const sourceUrl=String(raw||'').trim();if(!sourceUrl)throw Error('URL da fonte é obrigatória');
  const root=await fetchText(sourceUrl);
- const pathName=new URL(root.url).pathname.toLowerCase();
- const text=root.text||'';
- const detectedM3U=/\\.m3u8?(?:$|[?#])/i.test(pathName)||/mpegurl|x-mpegurl/i.test(root.contentType)||/^\\s*#EXTM3U/i.test(text)||/^\\s*#EXT-X-(STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)/i.test(text);
- const type=String(requestedType||'website').toLowerCase();
+ const pathName=new URL(root.url).pathname.toLowerCase(),text=root.text||'',type=String(requestedType||'website').toLowerCase();
+ const detectedM3U=/\.(?:m3u8?|m3u)(?:$|[?#])/i.test(root.url)||/mpegurl|x-mpegurl/i.test(root.contentType)||/^\s*#EXTM3U/i.test(text)||/^\s*#EXT-X-(STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)/i.test(text);
  if(type==='m3u'||type==='m3u8'||detectedM3U){
   const parsed=parseM3U(text,root.url,root.url);
-  if(parsed.items.length) return {kind:'m3u',sourceUrl:root.url,items:parsed.items,discovered:1,playlists:[root.url],message:parsed.isMaster?'Playlist HLS mestre analisada.':parsed.isMedia?'Stream HLS identificado.':'Playlist M3U/M3U8 analisada.'};
-  if(type==='m3u8'||/m3u8/i.test(pathName)||/mpegurl|x-mpegurl/i.test(root.contentType)){
-   return {kind:'m3u8',sourceUrl:root.url,items:[{type:'channel',name:streamNameFromUrl(root.url,'Stream M3U8'),originalName:streamNameFromUrl(root.url,'Stream M3U8'),group:'',logo:'',streamUrl:root.url,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'direct-m3u8'}}],discovered:1,playlists:[root.url],message:'Stream M3U8 direto identificado.'};
+  if(parsed.items.length)return {kind:'m3u',sourceUrl:root.url,items:parsed.items,discovered:1,playlists:[root.url],message:parsed.isMaster?'Playlist HLS mestre analisada.':parsed.isMedia?'Stream HLS identificado.':'Playlist M3U/M3U8 analisada.'};
+  if(type==='m3u8'||/m3u8/i.test(root.url)||/mpegurl|x-mpegurl/i.test(root.contentType)){
+   const n=streamNameFromUrl(root.url,'Stream M3U8');
+   return {kind:'m3u8',sourceUrl:root.url,items:[{type:'channel',name:n,originalName:n,group:'',logo:'',streamUrl:root.url,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'direct-m3u8'}}],discovered:1,playlists:[root.url],message:'Stream M3U8 direto identificado.'};
   }
  }
  const candidates=htmlItems(text,root.url).filter(x=>x.streamType==='m3u8').slice(0,50);
  const collected=[],seen=new Set();let failed=0;
  for(const c of candidates){
   try{
-   const p=await fetchText(c.streamUrl);
-   const parsed=parseM3U(p.text,p.url,p.url);
+   const p=await fetchText(c.streamUrl),parsed=parseM3U(p.text,p.url,p.url);
    const its=parsed.items.length?parsed.items:[{type:'channel',name:streamNameFromUrl(c.streamUrl),originalName:streamNameFromUrl(c.streamUrl),group:'',logo:'',streamUrl:c.streamUrl,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'website-playlist'}}];
    for(const x of its)if(x.streamUrl&&!seen.has(x.streamUrl)){seen.add(x.streamUrl);collected.push(x)}
   }catch{failed++}
