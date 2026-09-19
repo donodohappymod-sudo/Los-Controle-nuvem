@@ -6,7 +6,13 @@ const nav=[['home','⌂','Início'],['sources','🌐','Fontes'],['library','▦'
 function shell(){root.innerHTML='<div class="app-shell"><aside><div class="logo"><span>♛</span><div><b>LOS COLLECTOR</b><small>Collect • Organize • Monitor</small></div></div><nav>'+nav.map(n=>'<button class="nav '+(S.page===n[0]?'on':'')+'" data-page="'+n[0]+'"><i>'+n[1]+'</i>'+n[2]+'</button>').join('')+'</nav><button class="logout" id="logout">↪ Sair</button></aside><section class="main"><header><button class="mobile-menu" id="menu">☰</button><div><b>'+nav.find(x=>x[0]===S.page)[2]+'</b><span>'+esc(S.user.email)+'</span></div><div class="status-dot">● online</div></header><div id="view"></div></section></div>';document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>{S.page=b.dataset.page;render()});document.querySelector('#logout').onclick=async()=>{await api('/api/auth/logout',{method:'POST'});S.user=null;login()};document.querySelector('#menu').onclick=()=>document.querySelector('aside').classList.toggle('open')}
 function cards(d){return '<div class="stats">'+[['🌐','Fontes',d.sources],['📺','Canais',d.channels],['🎬','Filmes',d.movies],['📺','Séries',d.series],['🎞️','Episódios',d.episodes],['🟢','Online',d.online],['🔴','Erros',d.errors]].map(x=>'<div class="stat"><span>'+x[0]+'</span><small>'+x[1]+'</small><strong>'+x[2]+'</strong></div>').join('')+'</div>'}
 async function pageHome(){const d=await api('/api/dashboard');return '<div class="hero"><div><small>PAINEL OPERACIONAL</small><h2>Controle sua operação IPTV em um só lugar.</h2><p>Fonte → Coleta → Biblioteca → Diagnóstico → Monitoramento → Mesclar → Gerar.</p></div><button class="primary" data-go="sources">+ Nova fonte</button></div>'+cards(d)+'<div class="grid2"><section class="panel"><h3>Fluxo conectado</h3><div class="flow">'+['Fontes','Coletor','Biblioteca','Diagnóstico','Monitoramento','Mesclar','Fonte IPTV'].map((x,i)=>'<span>'+x+(i<6?' →':'')+'</span>').join('')+'</div></section><section class="panel"><h3>Operação</h3><p class="muted">Todos os módulos usam a mesma base PostgreSQL e a mesma sessão autenticada.</p><button class="btn" data-go="diagnosis">Executar diagnóstico</button></section></div>'}
-async function pageSources(){const d=await api('/api/sources');return '<div class="toolbar"><div><h2>Fontes</h2><p class="muted">Cadastre e colete fontes públicas ou autorizadas.</p></div><button class="primary" id="newSource">+ Adicionar fonte</button></div><div class="panel"><div class="table-wrap"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Status</th><th>Canais</th><th>Filmes</th><th>Séries</th><th>Episódios</th><th>Ações</th></tr></thead><tbody>'+d.items.map(x=>'<tr><td><b>'+esc(x.name)+'</b><small>'+esc(x.url)+'</small></td><td>'+esc(x.type)+'</td><td><em class="'+x.status+'">'+esc(x.status)+'</em></td><td>'+x.channels+'</td><td>'+x.movies+'</td><td>'+x.series+'</td><td>'+x.episodes+'</td><td><button class="mini collect" data-id="'+x.id+'">Coletar</button> <button class="mini del" data-id="'+x.id+'">Excluir</button></td></tr>').join('')+'</tbody></table></div></div><div id="sourceModal"></div>'}
+async function pageSources(){
+ const d=await api('/api/sources');
+ return '<div class="toolbar"><div><h2>Fontes</h2><p class="muted">Cadastre uma URL pública/autorizada e deixe o coletor analisar a fonte imediatamente.</p></div><button class="primary" id="newSource">+ Adicionar fonte</button></div>'+
+ '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Status</th><th>Canais</th><th>Filmes</th><th>Séries</th><th>Episódios</th><th>Ações</th></tr></thead><tbody>'+
+ d.items.map(x=>'<tr><td><b>'+esc(x.name)+'</b><small>'+esc(x.url)+'</small></td><td>'+esc(x.type)+'</td><td><em class="'+x.status+'">'+esc(x.status)+'</em></td><td>'+x.channels+'</td><td>'+x.movies+'</td><td>'+x.series+'</td><td>'+x.episodes+'</td><td><button class="mini collect" data-id="'+x.id+'">Coletar agora</button> <button class="mini del" data-id="'+x.id+'">Excluir</button></td></tr>').join('')+
+ '</tbody></table></div></div><div id="sourceModal"></div>';
+}
 async function pageLibrary(){const d=await api('/api/library?search='+encodeURIComponent(S.search||''));return '<div class="toolbar"><div><h2>Biblioteca</h2><p class="muted">Canais, filmes, séries e episódios centralizados.</p></div><input id="search" class="search" placeholder="Buscar..." value="'+esc(S.search||'')+'"></div><div class="tabs">'+['all','channel','movie','series','episode'].map(t=>'<button class="tab '+((S.type||'all')===t?'active':'')+'" data-type="'+t+'">'+({all:'TODOS',channel:'CANAIS',movie:'FILMES',series:'SÉRIES',episode:'EPISÓDIOS'}[t])+'</button>').join('')+'</div><div class="library-grid">'+d.items.concat(d.series.map(x=>({...x,type:'series',name:x.title,logo:x.coverUrl,streamUrl:''})),d.episodes.map(x=>({...x,type:'episode',name:x.title}))).filter(x=>!S.type||S.type==='all'||x.type===S.type).map(x=>'<article class="item"><div class="thumb">'+(x.logo?'<img src="'+esc(x.logo)+'" alt="">':'<span>'+({channel:'📺',movie:'🎬',series:'📺',episode:'🎞️'}[x.type]||'•')+'</span>')+'</div><div><b>'+esc(x.name)+'</b><small>'+esc(x.group||x.description||x.type)+'</small><small class="'+x.status+'">'+esc(x.status||'unknown')+'</small></div><div class="item-actions">'+(x.streamUrl?'<button class="mini copy" data-url="'+esc(x.streamUrl)+'">Copiar</button>':'')+(x.id&&!x.title?'<button class="mini delitem" data-id="'+x.id+'">Excluir</button>':'')+'</div></article>').join('')+'</div>'}
 async function pageDiagnosis(){return '<div class="toolbar"><div><h2>Diagnóstico</h2><p class="muted">Verificação individual com HTTP, latência, timeout e motivo.</p></div><button class="primary" id="runDiag">Executar agora</button></div><div id="diagResult" class="panel"><p class="muted">Execute uma análise para verificar toda a biblioteca.</p></div>'}
 async function pageMonitoring(){const d=await api('/api/monitoring');return '<div class="toolbar"><div><h2>Monitoramento</h2><p class="muted">Histórico das verificações e estado das fontes.</p></div><button class="primary" id="runMon">Rodar monitoramento</button></div><section class="panel"><h3>Últimas execuções</h3><div class="table-wrap"><table><thead><tr><th>Data</th><th>Tipo</th><th>Total</th><th>Online</th><th>Erros</th><th>Timeout</th></tr></thead><tbody>'+d.runs.map(x=>'<tr><td>'+new Date(x.createdAt).toLocaleString('pt-BR')+'</td><td>'+x.kind+'</td><td>'+x.total+'</td><td class="online">'+x.online+'</td><td class="error">'+x.errors+'</td><td>'+x.timeouts+'</td></tr>').join('')+'</tbody></table></div></section>'}
@@ -16,9 +22,48 @@ async function pageStudio(){const d=await api('/api/studio');return '<div class=
 async function pageSettings(){return '<div class="toolbar"><div><h2>Configurações</h2><p class="muted">Segurança da conta.</p></div></div><section class="panel narrow"><h3>Alterar senha</h3><form id="pwForm" class="form"><label>Senha atual<input name="currentPassword" type="password" required></label><label>Nova senha<input name="newPassword" type="password" minlength="10" required></label><button class="primary">Atualizar senha</button></form></section>'}
 async function render(){if(!S.user)return login();shell();const view=document.querySelector('#view');try{S.search=S.search||'';const pages={home:pageHome,sources:pageSources,library:pageLibrary,diagnosis:pageDiagnosis,monitoring:pageMonitoring,merge:pageMerge,generated:pageGenerated,studio:pageStudio,settings:pageSettings};view.innerHTML=await pages[S.page]();bind()}catch(e){view.innerHTML='<div class="panel error">Erro: '+esc(e.message)+'</div>'}}
 function modal(html){document.body.insertAdjacentHTML('beforeend',html)}
-function bind(){document.querySelectorAll('[data-go]').forEach(x=>x.onclick=()=>{S.page=x.dataset.go;render()});const n=document.querySelector('#newSource');if(n)n.onclick=()=>modal('<div class="modal"><form id="sourceForm" class="modal-card"><button type="button" class="close" id="close">×</button><h3>Nova fonte</h3><label>Nome<input name="name" required placeholder="Minha fonte"></label><label>URL<input name="url" type="url" required placeholder="https://..."></label><label>Tipo<select name="type"><option value="website">Website</option><option value="m3u">M3U</option><option value="m3u8">M3U8</option><option value="media">Mídia</option></select></label><label class="checkline"><input type="checkbox" name="collectNow"> Coletar imediatamente</label><button class="primary">Salvar e conectar</button><div id="modalMsg"></div></form></div>');
-const sf=document.querySelector('#sourceForm');if(sf){document.querySelector('#close').onclick=()=>document.querySelector('.modal').remove();sf.onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target),b={name:f.get('name'),url:f.get('url'),type:f.get('type'),collectNow:f.has('collectNow')};try{await api('/api/sources',{method:'POST',body:JSON.stringify(b)});document.querySelector('.modal').remove();render()}catch(x){document.querySelector('#modalMsg').textContent=x.message}}}
-document.querySelectorAll('.collect').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const r=await api('/api/sources/'+b.dataset.id+'/collect',{method:'POST'});alert('Coleta concluída: '+r.count+' itens');render()}catch(e){alert(e.message)}finally{b.disabled=false}});
+function bind(){document.querySelectorAll('[data-go]').forEach(x=>x.onclick=()=>{S.page=x.dataset.go;render()});const n=document.querySelector('#newSource');
+if(n)n.onclick=()=>modal('<div class="modal"><form id="sourceForm" class="modal-card"><button type="button" class="close" id="close">×</button><h3>Nova fonte</h3><p class="muted">O sistema vai testar a URL, identificar o formato e importar os itens encontrados.</p><label>Nome<input name="name" required placeholder="Minha fonte"></label><label>URL<input name="url" type="url" required placeholder="https://..."></label><label>Tipo<select name="type"><option value="website">Website / catálogo</option><option value="m3u">M3U</option><option value="m3u8">M3U8 / HLS</option><option value="media">Mídia direta</option></select></label><label class="checkline"><input type="checkbox" name="collectNow" checked> Coletar imediatamente</label><div id="modalMsg" class="muted"></div><button class="primary" id="sourceSubmit">Salvar e conectar</button></form></div>');
+const sf=document.querySelector('#sourceForm');
+if(sf){
+ document.querySelector('#close').onclick=()=>document.querySelector('.modal')?.remove();
+ sf.onsubmit=async e=>{
+  e.preventDefault();
+  const f=new FormData(e.target),b={name:f.get('name'),url:f.get('url'),type:f.get('type'),collectNow:f.has('collectNow')};
+  const btn=document.querySelector('#sourceSubmit'),msg=document.querySelector('#modalMsg');
+  btn.disabled=true;msg.className='muted';msg.textContent=b.collectNow?'Conectando à fonte e analisando o conteúdo...':'Salvando fonte...';
+  try{
+   const r=await api('/api/sources',{method:'POST',body:JSON.stringify(b)});
+   if(r.collected){
+    const z=r.collected.summary||{};
+    msg.className='success-box';
+    msg.innerHTML='<b>Coleta concluída.</b><br>'+z.imported+' itens importados de '+z.received+' encontrados.'+(z.failed?' '+z.failed+' itens tiveram erro.':'')+'<br><small>'+esc(r.collected.message||'Fonte processada.')+'</small><br><button type="button" class="primary" id="closeAndRefresh">Fechar e atualizar</button>';
+   }else{
+    msg.className='success-box';
+    msg.innerHTML='<b>Fonte salva.</b><br>A coleta automática foi desativada.<br><button type="button" class="primary" id="closeAndRefresh">Fechar e atualizar</button>';
+   }
+   document.querySelector('#closeAndRefresh').onclick=()=>{document.querySelector('.modal')?.remove();render()};
+   btn.style.display='none';
+  }catch(x){
+   btn.disabled=false;
+   msg.className='error';
+   msg.textContent='Não foi possível conectar: '+x.message;
+  }
+ };
+}
+
+document.querySelectorAll('.collect').forEach(b=>b.onclick=async()=>{
+ const old=b.textContent;b.disabled=true;b.textContent='Coletando...';
+ try{
+  const r=await api('/api/sources/'+b.dataset.id+'/collect',{method:'POST'});
+  const z=r.summary||{};
+  b.textContent=z.imported+' importados';
+  setTimeout(()=>render(),900);
+ }catch(e){
+  b.disabled=false;b.textContent=old;alert('Coleta não concluída: '+e.message);
+ }
+});
+
 document.querySelectorAll('.del').forEach(b=>b.onclick=async()=>{if(confirm('Excluir esta fonte e seus itens?')){await api('/api/sources/'+b.dataset.id,{method:'DELETE'});render()}});
 const search=document.querySelector('#search');if(search){search.oninput=()=>{clearTimeout(S.st);S.st=setTimeout(()=>{S.search=search.value;render()},350)}}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{S.type=b.dataset.type;render()});
