@@ -360,7 +360,7 @@ async function aiDiagnose(){
  let ai=null;
  if(openaiConfigured){
   try{
-   const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'content-type':'application/json','authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model:process.env.OPENAI_MODEL||'gpt-5.6-luna',input:'Analise estes testes do LOS COLLECTOR e responda em português com: 1) falhas reais, 2) causa provável, 3) próximos testes. Não invente fatos. Dados: '+JSON.stringify(checks)})});
+   const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'content-type':'application/json','authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model:process.env.OPENAI_MODEL||'gpt-6-astra',input:'Analise estes testes do LOS COLLECTOR e responda em português com: 1) falhas reais, 2) causa provável, 3) próximos testes. Não invente fatos. Dados: '+JSON.stringify(checks)})});
    const data=await response.json();
    if(!response.ok)throw Error(data.error?.message||('OpenAI HTTP '+response.status));
    ai=data.output_text||data.output?.map(x=>x.content?.map(y=>y.text||'').join('')).join('')||'';
