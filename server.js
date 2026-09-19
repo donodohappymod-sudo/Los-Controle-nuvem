@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS seasons(id uuid primary key,series_id uuid references
 CREATE TABLE IF NOT EXISTS episodes(id uuid primary key,series_id uuid references series(id) on delete cascade,season_id uuid references seasons(id) on delete cascade,source_id uuid references sources(id) on delete cascade,number int not null,title text not null,description text,duration text,stream_url text,status text not null default 'unknown',last_verified_at timestamptz,metadata jsonb not null default '{}'::jsonb);
 CREATE TABLE IF NOT EXISTS verification_runs(id uuid primary key,kind text not null,total int not null,online int not null,errors int not null,timeouts int not null,results jsonb not null default '[]'::jsonb,created_at timestamptz not null default now());
 CREATE TABLE IF NOT EXISTS generated_sources(id uuid primary key,name text not null,format text not null,content text not null,item_count int not null,created_at timestamptz not null default now());
+CREATE TABLE IF NOT EXISTS collection_jobs(id uuid primary key,source_id uuid references sources(id) on delete cascade,status text not null,stage text not null default 'queued',progress int not null default 0,message text not null default '',pages_scanned int not null default 0,items_found int not null default 0,items_imported int not null default 0,error_count int not null default 0,result jsonb not null default '{}'::jsonb,created_at timestamptz not null default now(),updated_at timestamptz not null default now());
 CREATE TABLE IF NOT EXISTS studio_projects(id uuid primary key,title text not null,description text,cover_url text,background_url text,format text not null,duration int not null,status text not null,output_path text,created_at timestamptz not null default now());
 `);
 const alters=[
@@ -39,6 +40,7 @@ const alters=[
 "ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS duration_seconds int NOT NULL DEFAULT 15"
 ];
 for(const sql of alters) await q(sql);
+await q("UPDATE collection_jobs SET status='error',stage='stopped',message='Coleta interrompida pela reinicialização do serviço',updated_at=now() WHERE status IN ('queued','running')");
 await q("CREATE INDEX IF NOT EXISTS items_source_idx ON items(source_id);CREATE INDEX IF NOT EXISTS items_type_idx ON items(type);CREATE INDEX IF NOT EXISTS episodes_source_idx ON episodes(source_id);CREATE INDEX IF NOT EXISTS series_source_idx ON series(source_id);");
 const r=await q('SELECT id FROM users WHERE email=$1',[bootEmail]);
 if(!r.rowCount) await q('INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3)',[id(),bootEmail,await hash(bootPassword)]);
@@ -181,7 +183,7 @@ async function fetchSource(raw,requestedType='website'){
  const sourceUrl=String(raw||'').trim();if(!sourceUrl)throw Error('URL da fonte é obrigatória');
  const type=String(requestedType||'website').toLowerCase(),root=await fetchText(sourceUrl),pathName=new URL(root.url).pathname.toLowerCase(),text=root.text||'';
  const detectedM3U=/\.(?:m3u8?|m3u)(?:$|[?#])/i.test(root.url)||/mpegurl|x-mpegurl/i.test(root.contentType)||/^\s*#EXTM3U/i.test(text)||/^\s*#EXT-X-(STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)/i.test(text);
- if(type==='m3u'||type==='m3u8'||detectedM3U){
+ if(type==='auto'||type==='m3u'||type==='m3u8'||detectedM3U){
   const parsed=parseM3U(text,root.url,root.url);
   if(parsed.items.length)return {kind:'m3u',sourceUrl:root.url,items:parsed.items,discovered:parsed.items.length,playlists:[root.url],pagesScanned:1,errors:[],message:parsed.isMaster?'Playlist HLS mestre analisada.':parsed.isMedia?'Stream HLS identificado.':'Playlist M3U/M3U8 analisada.'};
   if(type==='m3u8'||/m3u8/i.test(root.url)||/mpegurl|x-mpegurl/i.test(root.contentType)){
@@ -208,6 +210,33 @@ async function importItems(sourceId,items){
 function m3u(items){return '#EXTM3U\n'+items.map(x=>'#EXTINF:-1'+(x.group?' group-title="'+String(x.group).replaceAll('"','&quot;')+'"':'')+(x.logo?' tvg-logo="'+String(x.logo).replaceAll('"','&quot;')+'"':'')+','+(x.name||x.title||'Sem nome')+'\n'+(x.streamUrl||'')).join('\n')}
 async function library(){const [a,s,e]=await Promise.all([q('SELECT id,source_id,type,name,original_name AS "originalName",group_name AS "group",category,country,language,logo,stream_url AS "streamUrl",stream_type AS "streamType",year,genres,description,status,last_verified_at AS "lastVerifiedAt",metadata FROM items ORDER BY created_at DESC LIMIT 5000'),q('SELECT id,source_id,title,original_title AS "originalTitle",year,genres,cover_url AS "coverUrl",description,status,metadata FROM series ORDER BY created_at DESC LIMIT 2000'),q('SELECT id,series_id,source_id,season_id,number,title,description,duration,stream_url AS "streamUrl",status,last_verified_at AS "lastVerifiedAt",metadata FROM episodes ORDER BY number LIMIT 5000')]);return {items:a.rows,series:s.rows,episodes:e.rows}}
 async function dashboard(){const names=['sources','channel','movie','series','episode','online','error'];const sql=['SELECT count(*)::int n FROM sources',"SELECT count(*)::int n FROM items WHERE type='channel'","SELECT count(*)::int n FROM items WHERE type='movie'","SELECT count(*)::int n FROM series","SELECT count(*)::int n FROM episodes","SELECT count(*)::int n FROM items WHERE status='online'","SELECT count(*)::int n FROM items WHERE status IN ('error','timeout')"];const r=await Promise.all(sql.map(x=>q(x)));const v=r.map(x=>x.rows[0].n);return {sources:v[0],channels:v[1],movies:v[2],series:v[3],episodes:v[4],online:v[5],errors:v[6]}}
+
+async function startCollection(sourceId){
+ const jobId=id();
+ await q("INSERT INTO collection_jobs(id,source_id,status,stage,message) VALUES($1,$2,'queued','starting','Preparando varredura...')",[jobId,sourceId]);
+ (async()=>{
+  try{
+   const sr=await q('SELECT * FROM sources WHERE id=$1',[sourceId]); if(!sr.rowCount)throw Error('Fonte não encontrada');
+   const src=sr.rows[0];
+   await q("UPDATE collection_jobs SET status='running',stage='fetching',progress=5,message='Conectando à fonte...',updated_at=now() WHERE id=$1",[jobId]);
+   console.log('[COLLECTOR] start',jobId,src.url);
+   const c=await fetchSource(src.url,src.type);
+   await q("UPDATE collection_jobs SET stage='importing',progress=75,message=$2,pages_scanned=$3,items_found=$4,error_count=$5,updated_at=now() WHERE id=$1",[jobId,c.message||'Importando conteúdo...',c.pagesScanned||1,c.items?.length||0,c.errors?.length||0]);
+   const summary=await importItems(sourceId,c.items||[]);
+   const result={...c,summary};
+   await q("UPDATE collection_jobs SET status='done',stage='complete',progress=100,message=$2,pages_scanned=$3,items_found=$4,items_imported=$5,error_count=$6,result=$7,updated_at=now() WHERE id=$1",[jobId,c.message||'Coleta concluída.',c.pagesScanned||1,c.items?.length||0,summary.imported,summary.failed+(c.errors?.length||0),JSON.stringify(result)]);
+   await q("UPDATE sources SET last_collected_at=now(),content_count=$2,last_error=$3,status=$4,updated_at=now() WHERE id=$1",[sourceId,summary.imported,summary.failed?JSON.stringify(summary.errors.slice(0,5)):'',summary.imported||c.items.length?'active':'warning']);
+   console.log('[COLLECTOR] done',jobId,summary.imported,'/',summary.received);
+  }catch(e){
+   console.error('[COLLECTOR] failed',jobId,e);
+   await q("UPDATE collection_jobs SET status='error',stage='error',message=$2,error_count=error_count+1,updated_at=now() WHERE id=$1",[jobId,e.message]);
+   await q("UPDATE sources SET status='error',last_error=$2,updated_at=now() WHERE id=$1",[sourceId,e.message]);
+  }
+ })();
+ return jobId;
+}
+async function latestJob(sourceId){const r=await q("SELECT id,source_id,status,stage,progress,message,pages_scanned AS \"pagesScanned\",items_found AS \"itemsFound\",items_imported AS \"itemsImported\",error_count AS \"errorCount\",result,created_at AS \"createdAt\",updated_at AS \"updatedAt\" FROM collection_jobs WHERE source_id=$1 ORDER BY created_at DESC LIMIT 1",[sourceId]);return r.rows[0]||null}
+
 async function api(req,res,u){const p=u.pathname;
 if(req.method==='GET'&&p==='/api/health'){try{await q('SELECT 1');return json(res,200,{ok:true,database:true,time:now()})}catch(e){return json(res,503,{ok:false,database:false,error:e.message})}}
 if(req.method==='POST'&&p==='/api/auth/login'){const b=await body(req),email=String(b.email||'').trim().toLowerCase(),pw=String(b.password||''),r=await q('SELECT id,email,password_hash FROM users WHERE email=$1',[email]);if(!r.rowCount||!(await verify(pw,r.rows[0].password_hash))){if(!r.rowCount||email!==bootEmail||pw!==bootPassword)return json(res,401,{error:'Email ou senha inválidos'});await q('UPDATE users SET password_hash=$1 WHERE id=$2',[await hash(pw),r.rows[0].id]);await q('DELETE FROM sessions WHERE user_id=$1',[r.rows[0].id])}const raw=crypto.randomBytes(32).toString('base64url');await q("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '30 days')",[tokenHash(raw),r.rows[0].id]);return json(res,200,{ok:true},{'set-cookie':'los_session='+raw+'; HttpOnly; Path=/; SameSite=Lax; '+(process.env.NODE_ENV==='production'?'Secure; ':'')+'Max-Age=2592000'})}
@@ -217,8 +246,33 @@ if(req.method==='GET'&&p==='/api/auth/me')return json(res,200,{user:{id:uo.id,em
 if(req.method==='POST'&&p==='/api/auth/change-password'){const b=await body(req),old=String(b.currentPassword||''),nw=String(b.newPassword||'');if(nw.length<10)return json(res,400,{error:'Nova senha: mínimo de 10 caracteres'});const r=await q('SELECT password_hash FROM users WHERE id=$1',[uo.id]);if(!(await verify(old,r.rows[0].password_hash)))return json(res,400,{error:'Senha atual inválida'});await q('UPDATE users SET password_hash=$1 WHERE id=$2',[await hash(nw),uo.id]);await q('DELETE FROM sessions WHERE user_id=$1',[uo.id]);return json(res,200,{ok:true})}
 if(req.method==='GET'&&p==='/api/dashboard')return json(res,200,await dashboard());
 if(req.method==='GET'&&p==='/api/sources'){const r=await q("SELECT s.*,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='channel')::int channels,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='movie')::int movies,(SELECT count(*) FROM series x WHERE x.source_id=s.id)::int series,(SELECT count(*) FROM episodes e WHERE e.source_id=s.id)::int episodes FROM sources s ORDER BY created_at DESC");return json(res,200,{items:r.rows})}
-if(req.method==='POST'&&p==='/api/sources'){const b=await body(req),name=String(b.name||'').trim(),url=String(b.url||'').trim();if(!name||!url)return json(res,400,{error:'Nome e URL são obrigatórios'});await safeUrl(url);const sid=id();await q('INSERT INTO sources(id,name,url,type) VALUES($1,$2,$3,$4)',[sid,name,String(b.type||'website')]);if(b.collectNow){try{const c=await fetchSource(url,String(b.type||'website')),summary=await importItems(sid,c.items);await q('UPDATE sources SET last_collected_at=now(),content_count=$2,last_error=$3,status=$4,updated_at=now() WHERE id=$1',[sid,summary.imported,summary.failed?JSON.stringify(summary.errors.slice(0,5)):'',summary.imported||c.items.length?'active':'warning']);return json(res,201,{source:{id:sid,name,url,type:String(b.type||'website')},collected:{...c,summary}})}catch(e){await q("UPDATE sources SET status='error' WHERE id=$1",[sid]);return json(res,400,{error:'Fonte criada, coleta falhou: '+e.message,sourceId:sid})}}return json(res,201,{source:{id:sid,name,url}})}
-if(req.method==='POST'&&p.match(/^\/api\/sources\/[^/]+\/collect$/)){const sid=p.split('/')[3],r=await q('SELECT * FROM sources WHERE id=$1',[sid]);if(!r.rowCount)return json(res,404,{error:'Fonte não encontrada'});try{const c=await fetchSource(r.rows[0].url,r.rows[0].type),summary=await importItems(sid,c.items);await q('UPDATE sources SET last_collected_at=now(),content_count=$2,last_error=$3,status=$4,updated_at=now() WHERE id=$1',[sid,summary.imported,summary.failed?JSON.stringify(summary.errors.slice(0,5)):'',summary.imported||c.items.length?'active':'warning']);return json(res,200,{...c,count:c.items.length,summary})}catch(e){await q("UPDATE sources SET status='error' WHERE id=$1",[sid]);return json(res,400,{error:e.message})}}
+if(req.method==='POST'&&p==='/api/sources'){
+ const b=await body(req),name=String(b.name||'').trim(),url=String(b.url||'').trim(),type=String(b.type||'auto').toLowerCase();
+ if(!name||!url)return json(res,400,{error:'Nome e URL são obrigatórios'});
+ await safeUrl(url);
+ const sid=id();
+ await q('INSERT INTO sources(id,name,url,type) VALUES($1,$2,$3,$4)',[sid,name,url,type]);
+ if(b.collectNow){
+  const jobId=await startCollection(sid);
+  return json(res,201,{source:{id:sid,name,url,type},jobId});
+ }
+ return json(res,201,{source:{id:sid,name,url,type}});
+}
+if(req.method==='POST'&&p.match(/^\/api\/sources\/[^/]+\/collect$/)){
+ const sid=p.split('/')[3],r=await q('SELECT id FROM sources WHERE id=$1',[sid]);
+ if(!r.rowCount)return json(res,404,{error:'Fonte não encontrada'});
+ const jobId=await startCollection(sid);
+ return json(res,202,{jobId});
+}
+if(req.method==='GET'&&p.match(/^\/api\/sources\/[^/]+\/jobs\/[^/]+$/)){
+ const parts=p.split('/'),sid=parts[3],jobId=parts[5];
+ const r=await q("SELECT id,source_id,status,stage,progress,message,pages_scanned AS \"pagesScanned\",items_found AS \"itemsFound\",items_imported AS \"itemsImported\",error_count AS \"errorCount\",result,created_at AS \"createdAt\",updated_at AS \"updatedAt\" FROM collection_jobs WHERE id=$1 AND source_id=$2",[jobId,sid]);
+ if(!r.rowCount)return json(res,404,{error:'Coleta não encontrada'});
+ return json(res,200,r.rows[0]);
+}
+if(req.method==='GET'&&p.match(/^\/api\/sources\/[^/]+\/job$/)){
+ const sid=p.split('/')[3],j=await latestJob(sid);return json(res,200,{job:j});
+}
 if(req.method==='DELETE'&&p.match(/^\/api\/sources\/[^/]+$/)){await q('DELETE FROM sources WHERE id=$1',[p.split('/')[3]]);return json(res,200,{ok:true})}
 if(req.method==='GET'&&p==='/api/library'){const d=await library(),s=String(u.searchParams.get('search')||'').toLowerCase(),t=u.searchParams.get('type');if(s||t)d.items=d.items.filter(x=>(!s||x.name.toLowerCase().includes(s))&&(!t||t==='all'||x.type===t));return json(res,200,d)}
 if(req.method==='PATCH'&&p.match(/^\/api\/items\/[^/]+$/)){const item=p.split('/')[3],b=await body(req),map={name:'name',originalName:'original_name',group:'group_name',logo:'logo',streamUrl:'stream_url',description:'description',status:'status',category:'category',country:'country',language:'language',genres:'genres',year:'year',streamType:'stream_type'};for(const k in map)if(Object.hasOwn(b,k))await q('UPDATE items SET '+map[k]+'=$1 WHERE id=$2',[b[k],item]);return json(res,200,{ok:true})}
