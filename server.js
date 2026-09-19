@@ -7,76 +7,163 @@ const bootEmail=(process.env.BOOTSTRAP_ADMIN_EMAIL||'miguelalvesmillk@gmail.com'
 const q=(t,p=[])=>pool.query(t,p),id=()=>crypto.randomUUID(),now=()=>new Date().toISOString();
 const hash=p=>new Promise((resolve,reject)=>{const salt=crypto.randomBytes(16);crypto.scrypt(p,salt,64,(e,b)=>e?reject(e):resolve('scrypt$'+salt.toString('base64url')+'$'+b.toString('base64url')))});
 const verify=async(p,h)=>{try{const a=String(h).split('$');if(a[0]!=='scrypt')return false;const salt=Buffer.from(a[1],'base64url'),want=Buffer.from(a[2],'base64url'),got=await new Promise((r,j)=>crypto.scrypt(p,salt,64,(e,b)=>e?j(e):r(b)));return want.length===got.length&&crypto.timingSafeEqual(want,got)}catch{return false}};
-async function init(){await q("CREATE TABLE IF NOT EXISTS users(id uuid primary key,email text unique not null,password_hash text not null,created_at timestamptz not null default now());CREATE TABLE IF NOT EXISTS sessions(token_hash text primary key,user_id uuid references users(id) on delete cascade,expires_at timestamptz not null);CREATE TABLE IF NOT EXISTS sources(id uuid primary key,name text not null,url text not null,type text not null,status text not null default 'active',created_at timestamptz not null default now(),last_collected_at timestamptz,last_verified_at timestamptz);CREATE TABLE IF NOT EXISTS items(id uuid primary key,source_id uuid references sources(id) on delete cascade,type text not null,name text not null,original_name text,group_name text,category text,country text,language text,logo text,stream_url text,stream_type text,year int,genres text,description text,status text not null default 'unknown',last_verified_at timestamptz,metadata jsonb not null default '{}'::jsonb,created_at timestamptz not null default now());CREATE TABLE IF NOT EXISTS series(id uuid primary key,source_id uuid references sources(id) on delete cascade,title text not null,original_title text,year int,genres text,cover_url text,description text,status text not null default 'unknown',metadata jsonb not null default '{}'::jsonb,created_at timestamptz not null default now());CREATE TABLE IF NOT EXISTS seasons(id uuid primary key,series_id uuid references series(id) on delete cascade,number int not null,unique(series_id,number));CREATE TABLE IF NOT EXISTS episodes(id uuid primary key,series_id uuid references series(id) on delete cascade,season_id uuid references seasons(id) on delete cascade,source_id uuid references sources(id) on delete cascade,number int not null,title text not null,description text,duration text,stream_url text,status text not null default 'unknown',last_verified_at timestamptz,metadata jsonb not null default '{}'::jsonb);CREATE TABLE IF NOT EXISTS verification_runs(id uuid primary key,kind text not null,total int not null,online int not null,errors int not null,timeouts int not null,results jsonb not null default '[]'::jsonb,created_at timestamptz not null default now());CREATE TABLE IF NOT EXISTS generated_sources(id uuid primary key,name text not null,format text not null,content text not null,item_count int not null,created_at timestamptz not null default now());CREATE TABLE IF NOT EXISTS studio_projects(id uuid primary key,title text not null,description text,cover_url text,background_url text,format text not null,duration int not null,status text not null,output_path text,created_at timestamptz not null default now());CREATE INDEX IF NOT EXISTS items_source_idx ON items(source_id);CREATE INDEX IF NOT EXISTS items_type_idx ON items(type);");
-const r=await q('SELECT id FROM users WHERE email=$1',[bootEmail]);if(!r.rowCount)await q('INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3)',[id(),bootEmail,await hash(bootPassword)]);else if(process.env.BOOTSTRAP_ADMIN_FORCE_RESET==='true'&&process.env.BOOTSTRAP_ADMIN_PASSWORD){await q('UPDATE users SET password_hash=$1 WHERE email=$2',[await hash(bootPassword),bootEmail]);await q('DELETE FROM sessions WHERE user_id=$1',[r.rows[0].id])}}
+async function init(){
+await q(`
+CREATE TABLE IF NOT EXISTS users(id uuid primary key,email text unique not null,password_hash text not null,created_at timestamptz not null default now());
+CREATE TABLE IF NOT EXISTS sessions(token_hash text primary key,user_id uuid references users(id) on delete cascade,expires_at timestamptz not null);
+CREATE TABLE IF NOT EXISTS sources(id uuid primary key,name text not null,url text not null,type text not null,status text not null default 'active',created_at timestamptz not null default now(),last_collected_at timestamptz,last_verified_at timestamptz);
+CREATE TABLE IF NOT EXISTS items(id uuid primary key,source_id uuid references sources(id) on delete cascade,type text not null,name text not null,original_name text,group_name text,category text,country text,language text,logo text,stream_url text,stream_type text,year int,genres text,description text,status text not null default 'unknown',last_verified_at timestamptz,metadata jsonb not null default '{}'::jsonb,created_at timestamptz not null default now());
+CREATE TABLE IF NOT EXISTS series(id uuid primary key,source_id uuid references sources(id) on delete cascade,title text not null,original_title text,year int,genres text,cover_url text,description text,status text not null default 'unknown',metadata jsonb not null default '{}'::jsonb,created_at timestamptz not null default now());
+CREATE TABLE IF NOT EXISTS seasons(id uuid primary key,series_id uuid references series(id) on delete cascade,number int not null,unique(series_id,number));
+CREATE TABLE IF NOT EXISTS episodes(id uuid primary key,series_id uuid references series(id) on delete cascade,season_id uuid references seasons(id) on delete cascade,source_id uuid references sources(id) on delete cascade,number int not null,title text not null,description text,duration text,stream_url text,status text not null default 'unknown',last_verified_at timestamptz,metadata jsonb not null default '{}'::jsonb);
+CREATE TABLE IF NOT EXISTS verification_runs(id uuid primary key,kind text not null,total int not null,online int not null,errors int not null,timeouts int not null,results jsonb not null default '[]'::jsonb,created_at timestamptz not null default now());
+CREATE TABLE IF NOT EXISTS generated_sources(id uuid primary key,name text not null,format text not null,content text not null,item_count int not null,created_at timestamptz not null default now());
+CREATE TABLE IF NOT EXISTS studio_projects(id uuid primary key,title text not null,description text,cover_url text,background_url text,format text not null,duration int not null,status text not null,output_path text,created_at timestamptz not null default now());
+`);
+const alters=[
+"ALTER TABLE users ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'admin'",
+"ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()",
+"ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()",
+"ALTER TABLE sources ADD COLUMN IF NOT EXISTS user_id uuid",
+"ALTER TABLE sources ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()",
+"ALTER TABLE sources ADD COLUMN IF NOT EXISTS content_count int NOT NULL DEFAULT 0",
+"ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_error text",
+"ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_collected_at timestamptz",
+"ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_verified_at timestamptz",
+"ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS genre text NOT NULL DEFAULT ''",
+"ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS logo_path text NOT NULL DEFAULT ''",
+"ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS background_video_path text NOT NULL DEFAULT ''",
+"ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS platform text NOT NULL DEFAULT ''",
+"ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS duration_seconds int NOT NULL DEFAULT 15"
+];
+for(const sql of alters) await q(sql);
+await q("CREATE INDEX IF NOT EXISTS items_source_idx ON items(source_id);CREATE INDEX IF NOT EXISTS items_type_idx ON items(type);CREATE INDEX IF NOT EXISTS episodes_source_idx ON episodes(source_id);CREATE INDEX IF NOT EXISTS series_source_idx ON series(source_id);");
+const r=await q('SELECT id FROM users WHERE email=$1',[bootEmail]);
+if(!r.rowCount) await q('INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3)',[id(),bootEmail,await hash(bootPassword)]);
+else if(process.env.BOOTSTRAP_ADMIN_FORCE_RESET==='true'&&process.env.BOOTSTRAP_ADMIN_PASSWORD){
+ await q('UPDATE users SET password_hash=$1,updated_at=now() WHERE email=$2',[await hash(bootPassword),bootEmail]);
+ await q('DELETE FROM sessions WHERE user_id=$1',[r.rows[0].id]);
+}
+}
 const send=(res,s,t,b,h={})=>{res.writeHead(s,{'content-type':t,'cache-control':'no-store',...h});res.end(b)},json=(res,s,o,h={})=>send(res,s,'application/json; charset=utf-8',JSON.stringify(o),h);
 async function body(req){let s='';for await(const c of req){s+=c;if(s.length>4e6)throw Error('Payload muito grande')}return s?JSON.parse(s):{}}
 const cookie=req=>{const m=(req.headers.cookie||'').match(/(?:^|;\s*)los_session=([^;]+)/);return m&&m[1]},tokenHash=t=>crypto.createHash('sha256').update(t).digest('hex');
 async function auth(req){const t=cookie(req);if(!t)return null;const r=await q('SELECT u.id,u.email,s.token_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()',[tokenHash(t)]);return r.rows[0]||null}
 async function safeUrl(raw){const u=new URL(raw);if(!['http:','https:'].includes(u.protocol))throw Error('Somente HTTP/HTTPS');const h=u.hostname.toLowerCase();if(h==='localhost'||h.endsWith('.local')||h.endsWith('.internal'))throw Error('Destino privado bloqueado');const ips=await dns.lookup(h,{all:true}).catch(()=>[]);for(const x of ips){const ip=x.address;if(/^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)||ip==='::1'||/^f[cd]/i.test(ip)||/^fe80:/i.test(ip))throw Error('Destino privado bloqueado')}return u}
-function attrs(s){const o={};for(const m of s.matchAll(/([\\w-]+)\\s*=\\s*("([^"]*)"|'([^']*)'|([^,\\s]+))/g))o[m[1]]=(m[3]??m[4]??m[5]??'').trim();return o}
-function absoluteUrl(raw,base){try{return new URL(String(raw).trim().replaceAll('\\/','/'),base).toString()}catch{return ''}}
-function streamNameFromUrl(raw,fallback='Stream detectado'){try{const u=new URL(raw),n=decodeURIComponent(u.pathname.split('/').pop()||'').replace(/[-_]+/g,' ').replace(/\\.[^.]+$/,'').trim();return n||fallback}catch{return fallback}}
-function parseM3U(text,baseUrl=''){
- const lines=String(text||'').replace(/^\\uFEFF/,'').split(/\\r?\\n/),out=[],seen=new Set();let pending=null,master=null;
- for(let i=0;i<lines.length;i++){
-  const line=lines[i].trim(); if(!line)continue;
-  if(/^#EXTINF:/i.test(line)){const at=attrs(line),name=line.split(',').slice(1).join(',').trim()||at['tvg-name']||'Sem nome';pending={at,name};continue}
-  if(/^#EXT-X-STREAM-INF:/i.test(line)){master=attrs(line.slice(line.indexOf(':')+1));continue}
-  if(/^#EXT-X-MEDIA:/i.test(line)){const at=attrs(line.slice(line.indexOf(':')+1));if(at.URI){const u=absoluteUrl(at.URI,baseUrl);if(u&&!seen.has(u)){seen.add(u);out.push({type:'channel',name:at.NAME||at['GROUP-ID']||streamNameFromUrl(u),originalName:at.NAME||'',group:at['GROUP-ID']||'',logo:'',streamUrl:u,status:'unknown',metadata:{discoveredFrom:'m3u8-rendition',language:at.LANGUAGE||''}})} }continue}
-  if(line.startsWith('#'))continue;
-  const url=absoluteUrl(line,baseUrl);if(!url)continue;
-  if(master){
-   if(!seen.has(url)){seen.add(url);const label=master.NAME||((master.RESOLUTION||master.BANDWIDTH)?['HLS',master.RESOLUTION||'',master.BANDWIDTH?Math.round(Number(master.BANDWIDTH)/1000)+'kbps':''].filter(Boolean).join(' '):streamNameFromUrl(url));out.push({type:'channel',name:label,originalName:label,group:'',logo:'',streamUrl:url,status:'unknown',metadata:{discoveredFrom:'m3u8-master',bandwidth:master.BANDWIDTH||'',resolution:master.RESOLUTION||'',codecs:master.CODECS||''}})}master=null;continue
+function attrs(s){
+ const o={};
+ for(const m of String(s||'').matchAll(/([\\w-]+)\\s*=\\s*("([^"]*)"|'([^']*)'|([^,\\s]+))/g)) o[m[1]]=(m[3]??m[4]??m[5]??'').trim();
+ return o;
+}
+function absoluteUrl(raw,base){
+ try{return new URL(String(raw).trim().replaceAll('\\/','/'),base).toString()}catch{return ''}
+}
+function streamNameFromUrl(raw,fallback='Stream detectado'){
+ try{
+  const u=new URL(raw),n=decodeURIComponent(u.pathname.split('/').pop()||'').replace(/[-_]+/g,' ').replace(/\\.[^.]+$/,'').trim();
+  return n||fallback;
+ }catch{return fallback}
+}
+function parseM3U(text,baseUrl='',sourceUrl=''){
+ const lines=String(text||'').replace(/^\\uFEFF/,'').split(/\\r?\\n/);
+ const out=[],seen=new Set();let pending=null,master=null,masterCount=0,hasTarget=false,hasSegments=false;
+ for(const rawLine of lines){
+  const line=rawLine.trim();
+  if(!line) continue;
+  if(/^#EXT-X-TARGETDURATION:/i.test(line)) hasTarget=true;
+  if(/^#EXTINF:/i.test(line)){
+   if(/^#EXT-X-/i.test(line)) continue;
+   const at=attrs(line),name=line.slice(line.indexOf(',')+1).trim()||at['tvg-name']||'Sem nome';
+   pending={at,name};continue;
   }
-  if(pending){
-   const at=pending.at,name=pending.name,z=((at.type||'')+' '+(at['group-title']||'')+' '+name).toLowerCase(),type=/movie|filme|vod/.test(z)?'movie':/episode|epis[oó]dio|season|temporada/.test(z)?'episode':'channel';
-   if(!seen.has(url)){seen.add(url);out.push({type,name,originalName:name,group:at['group-title']||'',logo:at['tvg-logo']||'',streamUrl:url,status:'unknown',metadata:{tvgId:at['tvg-id']||'',language:at['tvg-language']||'',channelId:at['tvg-chno']||''}})}
-   pending=null;continue
+  if(/^#EXT-X-STREAM-INF:/i.test(line)){master=attrs(line.slice(line.indexOf(':')+1));masterCount++;continue}
+  if(/^#EXT-X-MEDIA:/i.test(line)){
+   const at=attrs(line.slice(line.indexOf(':')+1));
+   if(at.URI){
+    const u=absoluteUrl(at.URI,baseUrl);
+    if(u&&!seen.has(u)){seen.add(u);out.push({type:'channel',name:at.NAME||at['GROUP-ID']||streamNameFromUrl(u),originalName:at.NAME||'',group:at['GROUP-ID']||'',logo:'',streamUrl:u,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'m3u8-rendition',language:at.LANGUAGE||'',sourceUrl}});
+   }
   }
+  continue;
  }
- return out
+ if(line.startsWith('#')) continue;
+ const url=absoluteUrl(line,baseUrl);if(!url)continue;
+ if(master){
+  if(!seen.has(url)){seen.add(url);const label=master.NAME||((master.RESOLUTION||master.BANDWIDTH)?['HLS',master.RESOLUTION||'',master.BANDWIDTH?Math.round(Number(master.BANDWIDTH)/1000)+'kbps':''].filter(Boolean).join(' '):streamNameFromUrl(url));out.push({type:'channel',name:label,originalName:label,group:'',logo:'',streamUrl:url,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'m3u8-master',bandwidth:master.BANDWIDTH||'',resolution:master.RESOLUTION||'',codecs:master.CODECS||'',sourceUrl}})}
+  master=null;continue;
+ }
+ if(pending){
+  const at=pending.at,name=pending.name,z=((at.type||'')+' '+(at['group-title']||'')+' '+name).toLowerCase();
+  const type=/movie|filme|vod/.test(z)?'movie':/episode|epis[oó]dio|season|temporada/.test(z)?'episode':'channel';
+  if(!seen.has(url)){seen.add(url);out.push({type,name,originalName:name,group:at['group-title']||'',logo:at['tvg-logo']||'',streamUrl:url,status:'unknown',streamType:/\\.m3u8(?:$|[?#])/i.test(url)?'m3u8':'stream',metadata:{tvgId:at['tvg-id']||'',language:at['tvg-language']||'',channelId:at['tvg-chno']||'',sourceUrl}})}
+  pending=null;continue;
+ }
+ hasSegments=true;
+ }
+ const looksLikeMediaPlaylist=hasTarget||hasSegments&&/\\#EXT-X-MEDIA-SEQUENCE|\\#EXT-X-ENDLIST/i.test(String(text));
+ if(!out.length&&looksLikeMediaPlaylist&&sourceUrl){
+  out.push({type:'channel',name:streamNameFromUrl(sourceUrl,'Stream M3U8'),originalName:streamNameFromUrl(sourceUrl,'Stream M3U8'),group:'',logo:'',streamUrl:sourceUrl,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'m3u8-media-playlist',sourceUrl}});
+ }
+ return {items:out,isMaster:masterCount>0,isMedia:looksLikeMediaPlaylist};
 }
 function htmlItems(text,baseUrl){
  const src=String(text||'').replaceAll('\\/','/').replace(/&amp;/gi,'&'),out=[],seen=new Set();
- const add=(raw,kind='website')=>{const u=absoluteUrl(raw,baseUrl);if(!u||seen.has(u)||seen.size>=50)return;if(!/^(https?):/i.test(u))return;
+ const add=(raw,kind='website')=>{
+  const u=absoluteUrl(raw,baseUrl);if(!u||seen.has(u)||seen.size>=200)return;
+  if(!/^(https?):/i.test(u))return;
   const isPlaylist=/\\.(m3u8?|m3u)(?:$|[?#])/i.test(u)||/[?&](?:format|type)=(?:m3u8?|m3u)/i.test(u);
   const isMedia=/\\.(mp4|mkv|ts|mpd)(?:$|[?#])/i.test(u);
   const isLikely=/(stream|live|playlist|video|movie|episode|channel|tv|iptv)/i.test(u);
-  if(kind==='playlist'||isPlaylist||isMedia||isLikely){seen.add(u);const n=streamNameFromUrl(u);out.push({type:/movie|filme/i.test(n)?'movie':'channel',name:n,originalName:n,group:'',logo:'',streamUrl:u,status:'unknown',metadata:{discoveredFrom:'website',kind:isPlaylist?'playlist':kind}})}
+  if(kind==='playlist'||isPlaylist||isMedia||isLikely){
+   seen.add(u);const n=streamNameFromUrl(u);
+   out.push({type:/movie|filme/i.test(n)?'movie':'channel',name:n,originalName:n,group:'',logo:'',streamUrl:u,status:'unknown',streamType:isPlaylist?'m3u8':'stream',metadata:{discoveredFrom:'website',kind:isPlaylist?'playlist':kind}});
+  }
  };
  for(const m of src.matchAll(/(?:href|src|data-src|data-url|content)\\s*=\\s*["']([^"']+)["']/gi))add(m[1]);
-  for(const m of src.matchAll(/https?:\/\/[^\s"'<>]+/gi))add(m[0]);
-  for(const m of src.matchAll(/(?:^|["'\s])(\/?[^"'\s<>]+\.(?:m3u8?|m3u)(?:\?[^"'\s<>]*)?)/gi))add(m[1],'playlist');
- return out
+ for(const m of src.matchAll(/https?:\\/\\/[^\\s"'<>]+/gi))add(m[0]);
+ for(const m of src.matchAll(/(?:^|["'\\s])(\\/?[^"'\\s<>]+\\.(?:m3u8?|m3u)(?:\\?[^"'\\s<>]*)?)/gi))add(m[1],'playlist');
+ return out;
 }
 async function fetchText(raw){
- const first=await safeUrl(raw);let current=first,lastResponse=null;
- for(let hop=0;hop<4;hop++){
+ const first=await safeUrl(raw);let current=first;
+ for(let hop=0;hop<5;hop++){
   const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),25000);
   try{
-   const r=await fetch(current,{redirect:'manual',signal:ac.signal,headers:{'user-agent':'LOS-COLLECTOR/5.0','accept':'text/html,application/vnd.apple.mpegurl,application/x-mpegurl,text/plain;q=0.9,*/*;q=0.1'}});
-   lastResponse=r;
+   const r=await fetch(current,{redirect:'manual',signal:ac.signal,headers:{'user-agent':'LOS-COLLECTOR/6.0','accept':'text/html,application/vnd.apple.mpegurl,application/x-mpegurl,text/plain;q=0.9,*/*;q=0.1'}});
    if([301,302,303,307,308].includes(r.status)){const loc=r.headers.get('location');if(!loc)throw Error('Redirecionamento sem destino');current=await safeUrl(new URL(loc,current));continue}
    if(!r.ok)throw Error('HTTP '+r.status);
-   const text=await r.text();if(text.length>12e6)throw Error('Resposta maior que o limite');
-   return {url:current,text,contentType:r.headers.get('content-type')||''};
+   const text=await r.text();if(text.length>20e6)throw Error('Resposta maior que o limite de 20 MB');
+   return {url:current,text,contentType:r.headers.get('content-type')||'',status:r.status};
   }finally{clearTimeout(timer)}
  }
  throw Error('Muitos redirecionamentos');
 }
-async function fetchSource(raw){
- const first=await safeUrl(raw),root=await fetchText(first.toString()),isM=/\\.(m3u8?|txt)$/i.test(new URL(root.url).pathname)||/mpegurl/i.test(root.contentType)||root.text.trim().startsWith('#EXTM3U');
- if(isM){const items=parseM3U(root.text,root.url);return {kind:'m3u',sourceUrl:root.url,items,discovered:1,playlists:[root.url]}}
- const candidates=htmlItems(root.text,root.url).filter(x=>/\\.(m3u8?|m3u)(?:$|[?#])/i.test(x.streamUrl)).slice(0,25);
+async function fetchSource(raw,requestedType='website'){
+ const sourceUrl=String(raw||'').trim();if(!sourceUrl)throw Error('URL da fonte é obrigatória');
+ const root=await fetchText(sourceUrl);
+ const pathName=new URL(root.url).pathname.toLowerCase();
+ const text=root.text||'';
+ const detectedM3U=/\\.m3u8?(?:$|[?#])/i.test(pathName)||/mpegurl|x-mpegurl/i.test(root.contentType)||/^\\s*#EXTM3U/i.test(text)||/^\\s*#EXT-X-(STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)/i.test(text);
+ const type=String(requestedType||'website').toLowerCase();
+ if(type==='m3u'||type==='m3u8'||detectedM3U){
+  const parsed=parseM3U(text,root.url,root.url);
+  if(parsed.items.length) return {kind:'m3u',sourceUrl:root.url,items:parsed.items,discovered:1,playlists:[root.url],message:parsed.isMaster?'Playlist HLS mestre analisada.':parsed.isMedia?'Stream HLS identificado.':'Playlist M3U/M3U8 analisada.'};
+  if(type==='m3u8'||/m3u8/i.test(pathName)||/mpegurl|x-mpegurl/i.test(root.contentType)){
+   return {kind:'m3u8',sourceUrl:root.url,items:[{type:'channel',name:streamNameFromUrl(root.url,'Stream M3U8'),originalName:streamNameFromUrl(root.url,'Stream M3U8'),group:'',logo:'',streamUrl:root.url,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'direct-m3u8'}}],discovered:1,playlists:[root.url],message:'Stream M3U8 direto identificado.'};
+  }
+ }
+ const candidates=htmlItems(text,root.url).filter(x=>x.streamType==='m3u8').slice(0,50);
  const collected=[],seen=new Set();let failed=0;
  for(const c of candidates){
-  try{const p=await fetchText(c.streamUrl),its=parseM3U(p.text,p.url);for(const x of its){if(!seen.has(x.streamUrl)){seen.add(x.streamUrl);collected.push(x)}}}
-  catch{failed++}
+  try{
+   const p=await fetchText(c.streamUrl);
+   const parsed=parseM3U(p.text,p.url,p.url);
+   const its=parsed.items.length?parsed.items:[{type:'channel',name:streamNameFromUrl(c.streamUrl),originalName:streamNameFromUrl(c.streamUrl),group:'',logo:'',streamUrl:c.streamUrl,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'website-playlist'}}];
+   for(const x of its)if(x.streamUrl&&!seen.has(x.streamUrl)){seen.add(x.streamUrl);collected.push(x)}
+  }catch{failed++}
  }
- const direct=htmlItems(root.text,root.url).filter(x=>!candidates.some(c=>c.streamUrl===x.streamUrl));
- for(const x of direct)if(!seen.has(x.streamUrl)){seen.add(x.streamUrl);collected.push(x)}
- return {kind:'website',sourceUrl:root.url,items:collected.slice(0,10000),discovered:candidates.length,failedPlaylists:failed,playlists:candidates.map(x=>x.streamUrl),message:candidates.length?'Playlists M3U/M3U8 descobertas e analisadas.':collected.length?'Streams encontrados na página.':'Nenhuma playlist/stream identificável encontrada.'}
+ for(const x of htmlItems(text,root.url).filter(x=>!candidates.some(c=>c.streamUrl===x.streamUrl)))if(!seen.has(x.streamUrl)){seen.add(x.streamUrl);collected.push(x)}
+ return {kind:'website',sourceUrl:root.url,items:collected.slice(0,10000),discovered:candidates.length,failedPlaylists:failed,playlists:candidates.map(x=>x.streamUrl),message:candidates.length?'Playlists M3U/M3U8 descobertas e analisadas.':collected.length?'Streams encontrados na página.':'Nenhuma playlist/stream identificável encontrada.'};
 }
 async function checkUrl(raw){const started=Date.now();try{const u=await safeUrl(raw),ac=new AbortController(),timer=setTimeout(()=>ac.abort(),12000);let r;try{r=await fetch(u,{method:'HEAD',redirect:'manual',signal:ac.signal,headers:{'user-agent':'LOS-COLLECTOR-CHECK/4.0'}});if([301,302,303,307,308].includes(r.status)){const loc=r.headers.get('location');if(loc){const target=new URL(loc,u);await safeUrl(target);r=await fetch(target,{method:'HEAD',redirect:'manual',signal:ac.signal,headers:{'user-agent':'LOS-COLLECTOR-CHECK/4.0'}})}}if(r.status===405||r.status===501)r=await fetch(u,{method:'GET',redirect:'manual',signal:ac.signal,headers:{range:'bytes=0-0','user-agent':'LOS-COLLECTOR-CHECK/4.0'}})}finally{clearTimeout(timer)}return {status:r.ok?'online':'error',httpStatus:r.status,responseMs:Date.now()-started,reason:r.ok?'OK':'HTTP '+r.status}}catch(e){return {status:e.name==='AbortError'?'timeout':'error',responseMs:Date.now()-started,reason:e.name==='AbortError'?'Timeout':e.message}}}
 async function importItems(sourceId,items){
@@ -103,13 +190,13 @@ if(req.method==='GET'&&p==='/api/auth/me')return json(res,200,{user:{id:uo.id,em
 if(req.method==='POST'&&p==='/api/auth/change-password'){const b=await body(req),old=String(b.currentPassword||''),nw=String(b.newPassword||'');if(nw.length<10)return json(res,400,{error:'Nova senha: mínimo de 10 caracteres'});const r=await q('SELECT password_hash FROM users WHERE id=$1',[uo.id]);if(!(await verify(old,r.rows[0].password_hash)))return json(res,400,{error:'Senha atual inválida'});await q('UPDATE users SET password_hash=$1 WHERE id=$2',[await hash(nw),uo.id]);await q('DELETE FROM sessions WHERE user_id=$1',[uo.id]);return json(res,200,{ok:true})}
 if(req.method==='GET'&&p==='/api/dashboard')return json(res,200,await dashboard());
 if(req.method==='GET'&&p==='/api/sources'){const r=await q("SELECT s.*,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='channel')::int channels,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='movie')::int movies,(SELECT count(*) FROM series x WHERE x.source_id=s.id)::int series,(SELECT count(*) FROM episodes e WHERE e.source_id=s.id)::int episodes FROM sources s ORDER BY created_at DESC");return json(res,200,{items:r.rows})}
-if(req.method==='POST'&&p==='/api/sources'){const b=await body(req),name=String(b.name||'').trim(),url=String(b.url||'').trim();if(!name||!url)return json(res,400,{error:'Nome e URL são obrigatórios'});await safeUrl(url);const sid=id();await q('INSERT INTO sources(id,name,url,type) VALUES($1,$2,$3,$4)',[sid,name,String(b.type||'website')]);if(b.collectNow){try{const c=await fetchSource(url),summary=await importItems(sid,c.items);await q('UPDATE sources SET last_collected_at=now(),status=$2 WHERE id=$1',[sid,summary.imported||c.items.length?'active':'warning']);return json(res,201,{source:{id:sid,name,url},collected:{...c,summary}})}catch(e){await q("UPDATE sources SET status='error' WHERE id=$1",[sid]);return json(res,400,{error:'Fonte criada, coleta falhou: '+e.message,sourceId:sid})}}return json(res,201,{source:{id:sid,name,url}})}
-if(req.method==='POST'&&p.match(/^\/api\/sources\/[^/]+\/collect$/)){const sid=p.split('/')[3],r=await q('SELECT * FROM sources WHERE id=$1',[sid]);if(!r.rowCount)return json(res,404,{error:'Fonte não encontrada'});try{const c=await fetchSource(r.rows[0].url),summary=await importItems(sid,c.items);await q('UPDATE sources SET last_collected_at=now(),status=$2 WHERE id=$1',[sid,summary.imported?'active':'warning']);return json(res,200,{...c,count:c.items.length,summary})}catch(e){await q("UPDATE sources SET status='error' WHERE id=$1",[sid]);return json(res,400,{error:e.message})}}
+if(req.method==='POST'&&p==='/api/sources'){const b=await body(req),name=String(b.name||'').trim(),url=String(b.url||'').trim();if(!name||!url)return json(res,400,{error:'Nome e URL são obrigatórios'});await safeUrl(url);const sid=id();await q('INSERT INTO sources(id,name,url,type) VALUES($1,$2,$3,$4)',[sid,name,String(b.type||'website')]);if(b.collectNow){try{const c=await fetchSource(url,String(b.type||'website')),summary=await importItems(sid,c.items);await q('UPDATE sources SET last_collected_at=now(),content_count=$2,last_error=$3,status=$4,updated_at=now() WHERE id=$1',[sid,summary.imported,summary.failed?JSON.stringify(summary.errors.slice(0,5)):'',summary.imported||c.items.length?'active':'warning']);return json(res,201,{source:{id:sid,name,url,type:String(b.type||'website')},collected:{...c,summary}})}catch(e){await q("UPDATE sources SET status='error' WHERE id=$1",[sid]);return json(res,400,{error:'Fonte criada, coleta falhou: '+e.message,sourceId:sid})}}return json(res,201,{source:{id:sid,name,url}})}
+if(req.method==='POST'&&p.match(/^\/api\/sources\/[^/]+\/collect$/)){const sid=p.split('/')[3],r=await q('SELECT * FROM sources WHERE id=$1',[sid]);if(!r.rowCount)return json(res,404,{error:'Fonte não encontrada'});try{const c=await fetchSource(r.rows[0].url,r.rows[0].type),summary=await importItems(sid,c.items);await q('UPDATE sources SET last_collected_at=now(),content_count=$2,last_error=$3,status=$4,updated_at=now() WHERE id=$1',[sid,summary.imported,summary.failed?JSON.stringify(summary.errors.slice(0,5)):'',summary.imported||c.items.length?'active':'warning']);return json(res,200,{...c,count:c.items.length,summary})}catch(e){await q("UPDATE sources SET status='error' WHERE id=$1",[sid]);return json(res,400,{error:e.message})}}
 if(req.method==='DELETE'&&p.match(/^\/api\/sources\/[^/]+$/)){await q('DELETE FROM sources WHERE id=$1',[p.split('/')[3]]);return json(res,200,{ok:true})}
 if(req.method==='GET'&&p==='/api/library'){const d=await library(),s=String(u.searchParams.get('search')||'').toLowerCase(),t=u.searchParams.get('type');if(s||t)d.items=d.items.filter(x=>(!s||x.name.toLowerCase().includes(s))&&(!t||t==='all'||x.type===t));return json(res,200,d)}
 if(req.method==='PATCH'&&p.match(/^\/api\/items\/[^/]+$/)){const item=p.split('/')[3],b=await body(req),map={name:'name',originalName:'original_name',group:'group_name',logo:'logo',streamUrl:'stream_url',description:'description',status:'status',category:'category',country:'country',language:'language',genres:'genres',year:'year',streamType:'stream_type'};for(const k in map)if(Object.hasOwn(b,k))await q('UPDATE items SET '+map[k]+'=$1 WHERE id=$2',[b[k],item]);return json(res,200,{ok:true})}
 if(req.method==='DELETE'&&p.match(/^\/api\/items\/[^/]+$/)){await q('DELETE FROM items WHERE id=$1',[p.split('/')[3]]);return json(res,200,{ok:true})}
-if(req.method==='POST'&&p==='/api/collect'){try{return json(res,200,await fetchSource(String((await body(req)).url||'')))}catch(e){return json(res,400,{error:e.message})}}
+if(req.method==='POST'&&p==='/api/collect'){try{const b=await body(req);return json(res,200,await fetchSource(String(b.url||''),String(b.type||'website')))}catch(e){return json(res,400,{error:e.message})}}
 if(req.method==='POST'&&p==='/api/diagnosis'){const all=(await q("SELECT id,type,stream_url FROM items WHERE stream_url<>'' ORDER BY created_at DESC LIMIT 5000")).rows,results=[];let online=0,errors=0,timeouts=0;for(const x of all){const z=await checkUrl(x.stream_url);if(z.status==='online')online++;else if(z.status==='timeout')timeouts++;else errors++;await q('UPDATE items SET status=$1,last_verified_at=now() WHERE id=$2',[z.status,x.id]);results.push({id:x.id,type:x.type,...z})}const run={id:id(),kind:'diagnosis',total:all.length,online,errors,timeouts,results};await q('INSERT INTO verification_runs(id,kind,total,online,errors,timeouts,results) VALUES($1,$2,$3,$4,$5,$6,$7)',[run.id,run.kind,run.total,online,errors,timeouts,JSON.stringify(results)]);return json(res,200,run)}
 if(req.method==='GET'&&p==='/api/monitoring'){const runs=await q('SELECT id,kind,total,online,errors,timeouts,created_at AS "createdAt" FROM verification_runs ORDER BY created_at DESC LIMIT 30'),sources=await q('SELECT id,name,status,last_collected_at AS "lastCollectedAt",last_verified_at AS "lastVerifiedAt" FROM sources ORDER BY created_at DESC');return json(res,200,{runs:runs.rows,sources:sources.rows})}
 if(req.method==='POST'&&p==='/api/monitoring/run'){const all=(await q("SELECT id,stream_url FROM items WHERE stream_url<>'' ORDER BY created_at DESC LIMIT 5000")).rows;let online=0,errors=0,timeouts=0;for(const x of all){const z=await checkUrl(x.stream_url);if(z.status==='online')online++;else if(z.status==='timeout')timeouts++;else errors++;await q('UPDATE items SET status=$1,last_verified_at=now() WHERE id=$2',[z.status,x.id])}const run={id:id(),kind:'monitoring',total:all.length,online,errors,timeouts};await q('INSERT INTO verification_runs(id,kind,total,online,errors,timeouts) VALUES($1,$2,$3,$4,$5,$6)',[run.id,run.kind,run.total,online,errors,timeouts]);return json(res,200,run)}
@@ -133,7 +220,7 @@ try{
   const vf=x.format==='16:9'
    ?'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2'
    :'scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2';
-  const f=spawn('ffmpeg',['-y','-i',x.background_url,'-t',String(x.duration),'-vf',vf,'-c:v','libx264','-preset','veryfast','-c:a','aac','-movflags','+faststart',out],{stdio:['ignore','ignore','pipe']});
+  const f=spawn('ffmpeg',['-y','-i',background,'-t',String(x.duration),'-vf',vf,'-c:v','libx264','-preset','veryfast','-c:a','aac','-movflags','+faststart',out],{stdio:['ignore','ignore','pipe']});
   let er='';
   f.stderr.on('data',d=>{er+=d});
   f.on('error',reject);
@@ -151,5 +238,5 @@ return json(res,200,{ok:true,status:'rendered'});
 }
 return json(res,404,{error:'Not found'})}
 const page=()=>fs.readFileSync(path.join(__dirname,'public','app.html'),'utf8');
-const server=http.createServer(async(req,res)=>{try{const u=new URL(req.url,'http://'+(req.headers.host||'localhost'));if(u.pathname.startsWith('/api/'))return await api(req,res,u);if(req.method==='GET'){if(u.pathname==='/'||!path.extname(u.pathname))return send(res,200,'text/html; charset=utf-8',page());const file=path.normalize(path.join(__dirname,'public',u.pathname));if(file.startsWith(path.join(__dirname,'public'))&&fs.existsSync(file)){const ext=path.extname(file),type=ext==='.css'?'text/css':ext==='.js'?'application/javascript':'application/octet-stream';return send(res,200,type,fs.readFileSync(file))}}send(res,404,'text/plain','Not found')}catch(e){console.error(e);json(res,500,{error:e.message||'Internal server error'})}});
+const server=http.createServer(async(req,res)=>{try{const u=new URL(req.url,'http://'+(req.headers.host||'localhost'));if(u.pathname.startsWith('/api/'))return await api(req,res,u);if(req.method==='GET'){if(u.pathname==='/'||!path.extname(u.pathname))return send(res,200,'text/html; charset=utf-8',page());const file=path.normalize(path.join(__dirname,'public',u.pathname));if(file.startsWith(path.join(__dirname,'public'))&&fs.existsSync(file)){const ext=path.extname(file),type=ext==='.css'?'text/css':ext==='.js'?'application/javascript':'application/octet-stream';return send(res,200,type,fs.readFileSync(file))}}send(res,404,'text/plain','Not found')}catch(e){console.error('API/HTTP ERROR',req.method,req.url,e);if(!res.headersSent)json(res,500,{error:e.message||'Internal server error'});else res.end()}});
 init().then(()=>server.listen(PORT,'0.0.0.0',()=>console.log('LOS COLLECTOR 4 listening on '+PORT))).catch(e=>{console.error(e);process.exit(1)});
