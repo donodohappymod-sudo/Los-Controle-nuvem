@@ -25,6 +25,7 @@ const alters=[
 "ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()",
 "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()",
 "ALTER TABLE sources ADD COLUMN IF NOT EXISTS user_id uuid",
+"ALTER TABLE sources ADD COLUMN IF NOT EXISTS type text NOT NULL DEFAULT 'website'",
 "ALTER TABLE sources ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()",
 "ALTER TABLE sources ADD COLUMN IF NOT EXISTS content_count int NOT NULL DEFAULT 0",
 "ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_error text",
@@ -34,6 +35,7 @@ const alters=[
 "ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS logo_path text NOT NULL DEFAULT ''",
 "ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS background_video_path text NOT NULL DEFAULT ''",
 "ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS platform text NOT NULL DEFAULT ''",
+"ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'draft'",
 "ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS duration_seconds int NOT NULL DEFAULT 15"
 ];
 for(const sql of alters) await q(sql);
