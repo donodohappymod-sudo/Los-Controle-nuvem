@@ -203,7 +203,7 @@ function pageMeta(text,url){
  return {title:clean||streamNameFromUrl(url,'Conteúdo'),description:htmlEntity(stripHtml(description)),image:absoluteUrl(image,url),year,genres:[...new Set(genres)],type,episodeNumber:Number(ep||0)||null,seasonNumber:Number(season||1)||1,seriesUrl,seriesTitle:seriesTitle||clean.replace(/\s+epis[oó]dio.*$/i,'').trim(),media:[...new Set(media)]};
 }
 function htmlItems(text,baseUrl){
- const src=String(text||'').replaceAll('\\/','/').replace(/&amp;/gi,'&'),out=[],seen=new Set(),pages=[],playerPages=[],meta=pageMeta(src,baseUrl);
+ const src=String(text||'').replaceAll('\/','/').replace(/&amp;/gi,'&'),out=[],seen=new Set(),pages=[],playerPages=[],meta=pageMeta(src,baseUrl);
  const addPage=(raw,priority=0)=>{
   const u=normalizePageUrl(raw,baseUrl);if(!u)return;
   const score=priority||(/\/(anime|episodio|temporada|genero|dublado|legendado|lancamento|ano|page|pagina)\b/i.test(new URL(u).pathname)?5:1);
@@ -213,7 +213,7 @@ function htmlItems(text,baseUrl){
   const u=absoluteUrl(raw,baseUrl);if(!u||!/^https?:/i.test(u))return;
   try{
    const x=new URL(u);
-   if(/\\.(?:jpg|jpeg|png|gif|svg|webp|css|js|ico|woff2?|pdf|zip|rar|xml|json)(?:$|[?#])/i.test(x.pathname))return;
+   if(/\.(?:jpg|jpeg|png|gif|svg|webp|css|js|ico|woff2?|pdf|zip|rar|xml|json)(?:$|[?#])/i.test(x.pathname))return;
    if(!playerPages.some(v=>v===u)&&playerPages.length<300)playerPages.push(u);
   }catch{}
  };
@@ -227,14 +227,14 @@ function htmlItems(text,baseUrl){
  for(const m of src.matchAll(/(?:href|src|data-src|data-url|data-href|data-player|data-video|data-embed|content)=["']([^"']+)["']/gi)){
   const raw=m[1],tag=m[0].toLowerCase();
   if(/iframe|data-player|data-video|data-embed/.test(tag))addPlayer(raw,'player');
-  if(/href|data-href/.test(tag))addPage(raw,/\\/(?:anime|episodio|temporada|genero|dublado|legendado|lancamento|ano|page|pagina)\\//i.test(raw)?8:1);
+  if(/href|data-href/.test(tag))addPage(raw,/\/(?:anime|episodio|temporada|genero|dublado|legendado|lancamento|ano|page|pagina)\//i.test(raw)?8:1);
   addMedia(raw,tag,'html-attribute');
  }
  for(const m of src.matchAll(/<iframe[^>]+(?:src|data-src)=["']([^"']+)["']/gi))addPlayer(m[1],'iframe');
- for(const m of src.matchAll(/(?:player|embed|iframe|video|source|file|src)\\s*[:=]\\s*["'](https?:[^"']+)["']/gi))addPlayer(m[2]||m[1],'script-player');
- for(const m of src.matchAll(/https?:\\/\\/[^\\s"'<>\\)]+/gi)){addMedia(m[0],'absolute-url','html');if(/(?:embed|player|iframe|video|stream|m3u8)/i.test(m[0]))addPlayer(m[0],'absolute-player')}
- for(const m of src.matchAll(/(?:^|["'\\s])(\\/?[^"'\\s<>]+\\.(?:m3u8?|m3u|mp4|m4v|webm|mov|mkv|ts|mpd)(?:\\?[^"'\\s<>]*)?)/gi))addMedia(m[1],'extension','embedded-url');
- for(const m of src.matchAll(/url\\(\\s*["']?([^"')]+)["']?\\s*\\)/gi))addMedia(m[1],'css-url','css');
+ for(const m of src.matchAll(/(?:player|embed|iframe|video|source|file|src)\s*[:=]\s*["'](https?:[^"']+)["']/gi))addPlayer(m[2]||m[1],'script-player');
+ for(const m of src.matchAll(/https?:\/\/[^\s"'<>\)]+/gi)){addMedia(m[0],'absolute-url','html');if(/(?:embed|player|iframe|video|stream|m3u8)/i.test(m[0]))addPlayer(m[0],'absolute-player')}
+ for(const m of src.matchAll(/(?:^|["'\s])(\/?[^"'\s<>]+\.(?:m3u8?|m3u|mp4|m4v|webm|mov|mkv|ts|mpd)(?:\?[^"'\s<>]*)?)/gi))addMedia(m[1],'extension','embedded-url');
+ for(const m of src.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi))addMedia(m[1],'css-url','css');
  if(meta.media.length)for(const u of meta.media)addMedia(u,'page-media','metadata');
  const catalogType=meta.type;
  if(catalogType==='series'||catalogType==='episode'||catalogType==='movie'){
@@ -287,7 +287,7 @@ async function fetchSource(raw,requestedType='website',onProgress=()=>{}){
   const st=classifyMediaUrl(root.url,root.contentType)||'stream';
   return {kind:'media',sourceUrl:root.url,items:[{type:'channel',name:streamNameFromUrl(root.url,'Stream'),originalName:streamNameFromUrl(root.url,'Stream'),group:'',logo:'',streamUrl:root.url,status:'unknown',streamType:st,metadata:{discoveredFrom:'direct-media'}}],discovered:1,pagesScanned:1,errors:[],message:'Mídia direta identificada.'};
  }
- const detectedM3U=/\\.(?:m3u8?|m3u)(?:$|[?#])/i.test(root.url)||/mpegurl|x-mpegurl/i.test(root.contentType)||/^\\s*#EXTM3U/i.test(text)||/^\\s*#EXT-X-(STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)/i.test(text);
+ const detectedM3U=/\.(?:m3u8?|m3u)(?:$|[?#])/i.test(root.url)||/mpegurl|x-mpegurl/i.test(root.contentType)||/^\s*#EXTM3U/i.test(text)||/^\s*#EXT-X-(STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)/i.test(text);
  if(type==='auto'||type==='m3u'||type==='m3u8'||detectedM3U){
   const parsed=parseM3U(text,root.url,root.url);
   if(parsed.items.length)return {kind:'m3u',sourceUrl:root.url,items:parsed.items,discovered:parsed.items.length,playlists:[root.url],pagesScanned:1,errors:[],message:parsed.isMaster?'Playlist HLS mestre analisada.':parsed.isMedia?'Stream HLS identificado.':'Playlist M3U/M3U8 analisada.'};
