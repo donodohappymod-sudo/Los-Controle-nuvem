@@ -259,7 +259,7 @@ async function crawlWebsite(rootUrl,options={}){
     for(const p of parsed.pages){
      if(job.kind!=='site')continue;
      if(visited.has(p)||queued.has(p)||visited.size+queue.length>=maxPages)continue;
-     queued.add(p);queue.push({url:p,depth:job.depth+1,kind:'site'});
+     const isPagination=/\/page\/\d+\/?$/i.test(new URL(p).pathname)||/[?&](?:page|paged)=\d+/i.test(new URL(p).search);queued.add(p);queue.push({url:p,depth:isPagination?job.depth:job.depth+1,kind:'site'});
     }
     for(const p of parsed.playerPages||[]){
      if(visited.has(p)||playerQueued.has(p)||visited.size+queue.length>=maxPages)continue;
