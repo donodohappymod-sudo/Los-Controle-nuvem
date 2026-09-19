@@ -23,7 +23,7 @@ async function pageSettings(){return '<div class="toolbar"><div><h2>Configuraç�
 async function render(){if(!S.user)return login();shell();const view=document.querySelector('#view');try{S.search=S.search||'';const pages={home:pageHome,sources:pageSources,library:pageLibrary,diagnosis:pageDiagnosis,monitoring:pageMonitoring,merge:pageMerge,generated:pageGenerated,studio:pageStudio,settings:pageSettings};view.innerHTML=await pages[S.page]();bind()}catch(e){view.innerHTML='<div class="panel error">Erro: '+esc(e.message)+'</div>'}}
 function modal(html){document.body.insertAdjacentHTML('beforeend',html)}
 function bind(){document.querySelectorAll('[data-go]').forEach(x=>x.onclick=()=>{S.page=x.dataset.go;render()});const n=document.querySelector('#newSource');
-if(n)n.onclick=()=>modal('<div class="modal"><form id="sourceForm" class="modal-card"><button type="button" class="close" id="close">×</button><h3>Nova fonte</h3><p class="muted">O sistema vai testar a URL, identificar o formato e importar os itens encontrados.</p><label>Nome<input name="name" required placeholder="Minha fonte"></label><label>URL<input name="url" type="url" required placeholder="https://..."></label><label>Tipo<select name="type"><option value="website">Website / catálogo</option><option value="m3u">M3U</option><option value="m3u8">M3U8 / HLS</option><option value="media">Mídia direta</option></select></label><label class="checkline"><input type="checkbox" name="collectNow" checked> Coletar imediatamente</label><div id="modalMsg" class="muted"></div><button class="primary" id="sourceSubmit">Salvar e conectar</button></form></div>');
+if(n)n.onclick=()=>modal('<div class="modal"><form id="sourceForm" class="modal-card"><button type="button" class="close" id="close">×</button><h3>Nova fonte</h3><p class="muted">O sistema vai testar a URL, identificar o formato e importar os itens encontrados.</p><label>Nome<input name="name" required placeholder="Minha fonte"></label><label>URL<input name="url" type="url" required placeholder="https://..."></label><label>Tipo<select name="type"><option value="auto">Auto detectar — recomendado</option><option value="website">Website / catálogo</option><option value="m3u">M3U</option><option value="m3u8">M3U8 / HLS (se a URL for uma playlist)</option><option value="media">Mídia direta</option></select></label><label class="checkline"><input type="checkbox" name="collectNow" checked> Coletar imediatamente</label><div id="modalMsg" class="muted"></div><button class="primary" id="sourceSubmit">Salvar e conectar</button></form></div>');
 const sf=document.querySelector('#sourceForm');
 if(sf){
  document.querySelector('#close').onclick=()=>document.querySelector('.modal')?.remove();
@@ -34,16 +34,35 @@ if(sf){
   btn.disabled=true;msg.className='muted';msg.textContent=b.collectNow?'Conectando à fonte e analisando o conteúdo...':'Salvando fonte...';
   try{
    const r=await api('/api/sources',{method:'POST',body:JSON.stringify(b)});
-   if(r.collected){
-    const z=r.collected.summary||{};
+   if(r.jobId){
+    btn.style.display='none';
     msg.className='success-box';
-    msg.innerHTML='<b>Coleta concluída.</b><br>'+z.imported+' itens importados de '+z.received+' encontrados.'+(z.failed?' '+z.failed+' itens tiveram erro.':'')+'<br><small>'+esc(r.collected.message||'Fonte processada.')+'</small><br><button type="button" class="primary" id="closeAndRefresh">Fechar e atualizar</button>';
+    msg.innerHTML='<b>Varredura iniciada.</b><div id="collectProgress" style="margin-top:10px">Conectando...</div><button type="button" class="primary" id="cancelVisual" style="margin-top:10px">Fechar janela</button>';
+    document.querySelector('#cancelVisual').onclick=()=>document.querySelector('.modal')?.remove();
+    const progress=document.querySelector('#collectProgress');
+    const poll=async()=>{
+      try{
+       const j=await api('/api/sources/'+r.source.id+'/jobs/'+r.jobId);
+       progress.innerHTML='<b>'+esc(j.stage)+'</b><br>'+esc(j.message)+'<br><strong>'+j.progress+'%</strong> · '+j.pagesScanned+' páginas · '+j.itemsFound+' conteúdos · '+j.itemsImported+' importados'+(j.errorCount?' · '+j.errorCount+' erros':'');
+       if(j.status==='done'){
+        progress.innerHTML+='<br><br><span class="success-box">Coleta concluída.</span><br><button type="button" class="primary" id="closeAndRefresh">Fechar e atualizar</button>';
+        document.querySelector('#closeAndRefresh').onclick=()=>{document.querySelector('.modal')?.remove();render()};
+        return;
+       }
+       if(j.status==='error'){
+        progress.innerHTML+='<br><br><span class="error">Coleta interrompida: '+esc(j.message)+'</span><br><button type="button" class="primary" id="closeAndRefresh">Fechar e atualizar</button>';
+        document.querySelector('#closeAndRefresh').onclick=()=>{document.querySelector('.modal')?.remove();render()};
+        return;
+       }
+       setTimeout(poll,1500);
+      }catch(e){progress.innerHTML='<span class="error">'+esc(e.message)+'</span>'}
+    };
+    poll();
    }else{
     msg.className='success-box';
-    msg.innerHTML='<b>Fonte salva.</b><br>A coleta automática foi desativada.<br><button type="button" class="primary" id="closeAndRefresh">Fechar e atualizar</button>';
+    msg.innerHTML='<b>Fonte salva.</b><br><button type="button" class="primary" id="closeAndRefresh">Fechar e atualizar</button>';
+    document.querySelector('#closeAndRefresh').onclick=()=>{document.querySelector('.modal')?.remove();render()};
    }
-   document.querySelector('#closeAndRefresh').onclick=()=>{document.querySelector('.modal')?.remove();render()};
-   btn.style.display='none';
   }catch(x){
    btn.disabled=false;
    msg.className='error';
@@ -56,9 +75,15 @@ document.querySelectorAll('.collect').forEach(b=>b.onclick=async()=>{
  const old=b.textContent;b.disabled=true;b.textContent='Coletando...';
  try{
   const r=await api('/api/sources/'+b.dataset.id+'/collect',{method:'POST'});
-  const z=r.summary||{};
-  b.textContent=z.imported+' importados';
-  setTimeout(()=>render(),900);
+  b.textContent='Varredura...';
+  const poll=async()=>{
+   try{
+    const j=await api('/api/sources/'+b.dataset.id+'/jobs/'+r.jobId);
+    if(j.status==='done'){b.textContent=j.itemsImported+' importados';setTimeout(()=>render(),800);return}
+    if(j.status==='error'){alert('Coleta: '+j.message);b.disabled=false;b.textContent=old;return}
+    setTimeout(poll,1500);
+   }catch(e){alert('Coleta: '+e.message);b.disabled=false;b.textContent=old}
+  }; poll();
  }catch(e){
   b.disabled=false;b.textContent=old;alert('Coleta não concluída: '+e.message);
  }
