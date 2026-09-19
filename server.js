@@ -345,6 +345,29 @@ async function startCollection(sourceId){
 }
 async function latestJob(sourceId){const r=await q("SELECT id,source_id,status,stage,progress,message,pages_scanned AS \"pagesScanned\",items_found AS \"itemsFound\",items_imported AS \"itemsImported\",error_count AS \"errorCount\",result,created_at AS \"createdAt\",updated_at AS \"updatedAt\" FROM collection_jobs WHERE source_id=$1 ORDER BY created_at DESC LIMIT 1",[sourceId]);return r.rows[0]||null}
 
+async function aiDiagnose(){
+ const checks=[];
+ const add=(name,ok,detail)=>checks.push({name,ok:Boolean(ok),detail:String(detail||'')});
+ try{await q('SELECT 1');add('PostgreSQL',true,'Conexão com banco funcionando')}catch(e){add('PostgreSQL',false,e.message)}
+ try{const r=await q("SELECT count(*)::int AS n FROM sources");add('Fontes',true,r.rows[0].n+' fonte(s) cadastrada(s)')}catch(e){add('Fontes',false,e.message)}
+ try{const r=await q("SELECT count(*)::int AS n FROM collection_jobs WHERE status IN ('queued','running')");add('Jobs de coleta',true,r.rows[0].n+' job(s) ativo(s)')}catch(e){add('Jobs de coleta',false,e.message)}
+ try{const r=await q("SELECT count(*)::int AS n FROM items");add('Biblioteca',true,r.rows[0].n+' item(ns) importado(s)')}catch(e){add('Biblioteca',false,e.message)}
+ try{const r=await q("SELECT count(*)::int AS n FROM series");add('Séries',true,r.rows[0].n+' série(s)')}catch(e){add('Séries',false,e.message)}
+ try{const r=await q("SELECT count(*)::int AS n FROM episodes");add('Episódios',true,r.rows[0].n+' episódio(s)')}catch(e){add('Episódios',false,e.message)}
+ try{const r=await q("SELECT count(*)::int AS n FROM generated_sources");add('Fontes geradas',true,r.rows[0].n+' fonte(s)')}catch(e){add('Fontes geradas',false,e.message)}
+ const openaiConfigured=Boolean(process.env.OPENAI_API_KEY);
+ const codexConfigured=Boolean(process.env.CODEX_API_KEY);
+ let ai=null;
+ if(openaiConfigured){
+  try{
+   const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{'content-type':'application/json','authorization':'Bearer '+process.env.OPENAI_API_KEY},body:JSON.stringify({model:process.env.OPENAI_MODEL||'gpt-5.6-luna',input:'Analise estes testes do LOS COLLECTOR e responda em português com: 1) falhas reais, 2) causa provável, 3) próximos testes. Não invente fatos. Dados: '+JSON.stringify(checks)})});
+   const data=await response.json();
+   if(!response.ok)throw Error(data.error?.message||('OpenAI HTTP '+response.status));
+   ai=data.output_text||data.output?.map(x=>x.content?.map(y=>y.text||'').join('')).join('')||'';
+  }catch(e){ai='GPT configurado, mas a análise falhou: '+e.message}
+ }
+ return {ok:checks.every(x=>x.ok),checks,integrations:{gpt:openaiConfigured,codex:codexConfigured},ai};
+}
 async function api(req,res,u){const p=u.pathname;
 if(req.method==='GET'&&p==='/api/health'){try{await q('SELECT 1');return json(res,200,{ok:true,database:true,time:now()})}catch(e){return json(res,503,{ok:false,database:false,error:e.message})}}
 if(req.method==='POST'&&p==='/api/auth/login'){const b=await body(req),email=String(b.email||'').trim().toLowerCase(),pw=String(b.password||''),r=await q('SELECT id,email,password_hash FROM users WHERE email=$1',[email]);if(!r.rowCount||!(await verify(pw,r.rows[0].password_hash))){if(!r.rowCount||email!==bootEmail||pw!==bootPassword)return json(res,401,{error:'Email ou senha inválidos'});await q('UPDATE users SET password_hash=$1 WHERE id=$2',[await hash(pw),r.rows[0].id]);await q('DELETE FROM sessions WHERE user_id=$1',[r.rows[0].id])}const raw=crypto.randomBytes(32).toString('base64url');await q("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '30 days')",[tokenHash(raw),r.rows[0].id]);return json(res,200,{ok:true},{'set-cookie':'los_session='+raw+'; HttpOnly; Path=/; SameSite=Lax; '+(process.env.NODE_ENV==='production'?'Secure; ':'')+'Max-Age=2592000'})}
@@ -352,6 +375,7 @@ if(req.method==='POST'&&p==='/api/auth/logout'){const t=cookie(req);if(t)await q
 const uo=await auth(req);if(!uo)return json(res,401,{error:'UNAUTHORIZED'});
 if(req.method==='GET'&&p==='/api/auth/me')return json(res,200,{user:{id:uo.id,email:uo.email}});
 if(req.method==='POST'&&p==='/api/auth/change-password'){const b=await body(req),old=String(b.currentPassword||''),nw=String(b.newPassword||'');if(nw.length<10)return json(res,400,{error:'Nova senha: mínimo de 10 caracteres'});const r=await q('SELECT password_hash FROM users WHERE id=$1',[uo.id]);if(!(await verify(old,r.rows[0].password_hash)))return json(res,400,{error:'Senha atual inválida'});await q('UPDATE users SET password_hash=$1 WHERE id=$2',[await hash(nw),uo.id]);await q('DELETE FROM sessions WHERE user_id=$1',[uo.id]);return json(res,200,{ok:true})}
+if(req.method==='GET'&&p==='/api/ai/diagnostics')return json(res,200,await aiDiagnose());
 if(req.method==='GET'&&p==='/api/dashboard')return json(res,200,await dashboard());
 if(req.method==='GET'&&p==='/api/sources'){const r=await q("SELECT s.*,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='channel')::int channels,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='movie')::int movies,(SELECT count(*) FROM series x WHERE x.source_id=s.id)::int series,(SELECT count(*) FROM episodes e WHERE e.source_id=s.id)::int episodes FROM sources s ORDER BY created_at DESC");return json(res,200,{items:r.rows})}
 if(req.method==='POST'&&p==='/api/sources'){
