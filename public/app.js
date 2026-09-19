@@ -13,6 +13,19 @@ async function pageSources(){
  d.items.map(x=>'<tr><td><b>'+esc(x.name)+'</b><small>'+esc(x.url)+'</small></td><td>'+esc(x.type)+'</td><td><em class="'+x.status+'">'+esc(x.status)+'</em></td><td>'+x.channels+'</td><td>'+x.movies+'</td><td>'+x.series+'</td><td>'+x.episodes+'</td><td><button class="mini collect" data-id="'+x.id+'">Coletar agora</button> <button class="mini del" data-id="'+x.id+'">Excluir</button></td></tr>').join('')+
  '</tbody></table></div></div><div id="sourceModal"></div>';
 }
+async function pageCollection(){
+ if(!S.collection)return '<div class="panel"><p class="muted">Nenhuma coleta ativa.</p></div>';
+ const j=await api('/api/sources/'+S.collection.sourceId+'/jobs/'+S.collection.jobId);
+ const done=j.status==='done',failed=j.status==='error';
+ return '<div class="toolbar"><div><h2>🔎 Varredura em andamento</h2><p class="muted">'+esc(S.collection.name)+'</p></div><button class="mini" id="backSources">Voltar para fontes</button></div>'+
+ '<section class="panel collection-panel"><div class="collection-big"><strong>'+j.progress+'%</strong><span>'+esc(j.stage)+'</span></div>'+
+ '<div class="progress-track"><div class="progress-fill" style="width:'+Math.max(0,Math.min(100,j.progress))+'%"></div></div>'+
+ '<h3>'+esc(j.message)+'</h3><p class="muted">'+j.pagesScanned+' páginas analisadas · '+j.itemsFound+' conteúdos encontrados · '+j.itemsImported+' importados · '+j.errorCount+' erros</p>'+
+ (done?'<div class="success-box"><b>Coleta concluída.</b><br>'+esc(j.message)+'</div>':'')+
+ (failed?'<div class="error"><b>Coleta interrompida.</b><br>'+esc(j.message)+'</div>':'')+
+ (done||failed?'<br><button class="primary" id="finishCollection">Ir para fontes</button>':'<p class="muted">Esta tela atualiza automaticamente a cada 1,5 segundo.</p>')+
+ '</section>';
+}
 async function pageLibrary(){const d=await api('/api/library?search='+encodeURIComponent(S.search||''));return '<div class="toolbar"><div><h2>Biblioteca</h2><p class="muted">Canais, filmes, séries e episódios centralizados.</p></div><input id="search" class="search" placeholder="Buscar..." value="'+esc(S.search||'')+'"></div><div class="tabs">'+['all','channel','movie','series','episode'].map(t=>'<button class="tab '+((S.type||'all')===t?'active':'')+'" data-type="'+t+'">'+({all:'TODOS',channel:'CANAIS',movie:'FILMES',series:'SÉRIES',episode:'EPISÓDIOS'}[t])+'</button>').join('')+'</div><div class="library-grid">'+d.items.concat(d.series.map(x=>({...x,type:'series',name:x.title,logo:x.coverUrl,streamUrl:''})),d.episodes.map(x=>({...x,type:'episode',name:x.title}))).filter(x=>!S.type||S.type==='all'||x.type===S.type).map(x=>'<article class="item"><div class="thumb">'+(x.logo?'<img src="'+esc(x.logo)+'" alt="">':'<span>'+({channel:'📺',movie:'🎬',series:'📺',episode:'🎞️'}[x.type]||'•')+'</span>')+'</div><div><b>'+esc(x.name)+'</b><small>'+esc(x.group||x.description||x.type)+'</small><small class="'+x.status+'">'+esc(x.status||'unknown')+'</small></div><div class="item-actions">'+(x.streamUrl?'<button class="mini copy" data-url="'+esc(x.streamUrl)+'">Copiar</button>':'')+(x.id&&!x.title?'<button class="mini delitem" data-id="'+x.id+'">Excluir</button>':'')+'</div></article>').join('')+'</div>'}
 async function pageDiagnosis(){return '<div class="toolbar"><div><h2>Diagnóstico</h2><p class="muted">Verificação individual com HTTP, latência, timeout e motivo.</p></div><button class="primary" id="runDiag">Executar agora</button></div><div id="diagResult" class="panel"><p class="muted">Execute uma análise para verificar toda a biblioteca.</p></div>'}
 async function pageMonitoring(){const d=await api('/api/monitoring');return '<div class="toolbar"><div><h2>Monitoramento</h2><p class="muted">Histórico das verificações e estado das fontes.</p></div><button class="primary" id="runMon">Rodar monitoramento</button></div><section class="panel"><h3>Últimas execuções</h3><div class="table-wrap"><table><thead><tr><th>Data</th><th>Tipo</th><th>Total</th><th>Online</th><th>Erros</th><th>Timeout</th></tr></thead><tbody>'+d.runs.map(x=>'<tr><td>'+new Date(x.createdAt).toLocaleString('pt-BR')+'</td><td>'+x.kind+'</td><td>'+x.total+'</td><td class="online">'+x.online+'</td><td class="error">'+x.errors+'</td><td>'+x.timeouts+'</td></tr>').join('')+'</tbody></table></div></section>'}
@@ -20,9 +33,16 @@ async function pageMerge(){const s=await api('/api/sources');return '<div class=
 async function pageGenerated(){const d=await api('/api/generated');return '<div class="toolbar"><div><h2>Fontes geradas</h2><p class="muted">Playlists M3U produzidas pelo sistema.</p></div></div><div class="panel"><div class="table-wrap"><table><thead><tr><th>Nome</th><th>Itens</th><th>Data</th><th>Ações</th></tr></thead><tbody>'+d.items.map(x=>'<tr><td>'+esc(x.name)+'</td><td>'+x.itemCount+'</td><td>'+new Date(x.createdAt).toLocaleString('pt-BR')+'</td><td><a class="mini" href="/api/generated/'+x.id+'" target="_blank">Abrir M3U</a></td></tr>').join('')+'</tbody></table></div></div>'}
 async function pageStudio(){const d=await api('/api/studio');return '<div class="toolbar"><div><h2>Studio</h2><p class="muted">Projetos promocionais com pipeline FFmpeg para vídeos autorizados.</p></div><button class="primary" id="newStudio">+ Projeto</button></div><div class="library-grid">'+d.items.map(x=>'<article class="item"><div class="thumb">'+(x.coverUrl?'<img src="'+esc(x.coverUrl)+'" alt="">':'✦')+'</div><div><b>'+esc(x.title)+'</b><small>'+esc(x.format)+' · '+x.duration+'s</small><small>'+esc(x.status)+'</small></div><button class="mini renderStudio" data-id="'+x.id+'">Renderizar</button></article>').join('')+'</div><div id="studioModal"></div>'}
 async function pageSettings(){return '<div class="toolbar"><div><h2>Configurações</h2><p class="muted">Segurança da conta.</p></div></div><section class="panel narrow"><h3>Alterar senha</h3><form id="pwForm" class="form"><label>Senha atual<input name="currentPassword" type="password" required></label><label>Nova senha<input name="newPassword" type="password" minlength="10" required></label><button class="primary">Atualizar senha</button></form></section>'}
-async function render(){if(!S.user)return login();shell();const view=document.querySelector('#view');try{S.search=S.search||'';const pages={home:pageHome,sources:pageSources,library:pageLibrary,diagnosis:pageDiagnosis,monitoring:pageMonitoring,merge:pageMerge,generated:pageGenerated,studio:pageStudio,settings:pageSettings};view.innerHTML=await pages[S.page]();bind()}catch(e){view.innerHTML='<div class="panel error">Erro: '+esc(e.message)+'</div>'}}
+async function render(){if(!S.user)return login();shell();const view=document.querySelector('#view');try{S.search=S.search||'';const pages={home:pageHome,sources:pageSources,collection:pageCollection,library:pageLibrary,diagnosis:pageDiagnosis,monitoring:pageMonitoring,merge:pageMerge,generated:pageGenerated,studio:pageStudio,settings:pageSettings};view.innerHTML=await pages[S.page]();bind()}catch(e){view.innerHTML='<div class="panel error">Erro: '+esc(e.message)+'</div>'}}
 function modal(html){document.body.insertAdjacentHTML('beforeend',html)}
-function bind(){document.querySelectorAll('[data-go]').forEach(x=>x.onclick=()=>{S.page=x.dataset.go;render()});const n=document.querySelector('#newSource');
+function bind(){
+const back=document.querySelector('#backSources');if(back)back.onclick=()=>{S.page='sources';render()};
+const finish=document.querySelector('#finishCollection');if(finish)finish.onclick=()=>{S.collection=null;S.page='sources';render()};
+if(S.page==='collection'&&S.collection){
+ const tick=async()=>{try{const j=await api('/api/sources/'+S.collection.sourceId+'/jobs/'+S.collection.jobId);if(j.status!=='done'&&j.status!=='error'){setTimeout(()=>{if(S.page==='collection')render()},1500)}}catch(e){console.error(e)}};
+ tick();
+}
+document.querySelectorAll('[data-go]').forEach(x=>x.onclick=()=>{S.page=x.dataset.go;render()});const n=document.querySelector('#newSource');
 if(n)n.onclick=()=>modal('<div class="modal"><form id="sourceForm" class="modal-card"><button type="button" class="close" id="close">×</button><h3>Nova fonte</h3><p class="muted">O sistema vai testar a URL, identificar o formato e importar os itens encontrados.</p><label>Nome<input name="name" required placeholder="Minha fonte"></label><label>URL<input name="url" type="url" required placeholder="https://..."></label><label>Tipo<select name="type"><option value="auto">Auto detectar — recomendado</option><option value="website">Website / catálogo</option><option value="m3u">M3U</option><option value="m3u8">M3U8 / HLS (se a URL for uma playlist)</option><option value="media">Mídia direta</option></select></label><label class="checkline"><input type="checkbox" name="collectNow" checked> Coletar imediatamente</label><div id="modalMsg" class="muted"></div><button class="primary" id="sourceSubmit">Salvar e conectar</button></form></div>');
 const sf=document.querySelector('#sourceForm');
 if(sf){
@@ -35,29 +55,10 @@ if(sf){
   try{
    const r=await api('/api/sources',{method:'POST',body:JSON.stringify(b)});
    if(r.jobId){
-    btn.style.display='none';
-    msg.className='success-box';
-    msg.innerHTML='<b>Varredura iniciada.</b><div id="collectProgress" style="margin-top:10px">Conectando...</div><button type="button" class="primary" id="cancelVisual" style="margin-top:10px">Fechar janela</button>';
-    document.querySelector('#cancelVisual').onclick=()=>document.querySelector('.modal')?.remove();
-    const progress=document.querySelector('#collectProgress');
-    const poll=async()=>{
-      try{
-       const j=await api('/api/sources/'+r.source.id+'/jobs/'+r.jobId);
-       progress.innerHTML='<b>'+esc(j.stage)+'</b><br>'+esc(j.message)+'<br><strong>'+j.progress+'%</strong> · '+j.pagesScanned+' páginas · '+j.itemsFound+' conteúdos · '+j.itemsImported+' importados'+(j.errorCount?' · '+j.errorCount+' erros':'');
-       if(j.status==='done'){
-        progress.innerHTML+='<br><br><span class="success-box">Coleta concluída.</span><br><button type="button" class="primary" id="closeAndRefresh">Fechar e atualizar</button>';
-        document.querySelector('#closeAndRefresh').onclick=()=>{document.querySelector('.modal')?.remove();render()};
-        return;
-       }
-       if(j.status==='error'){
-        progress.innerHTML+='<br><br><span class="error">Coleta interrompida: '+esc(j.message)+'</span><br><button type="button" class="primary" id="closeAndRefresh">Fechar e atualizar</button>';
-        document.querySelector('#closeAndRefresh').onclick=()=>{document.querySelector('.modal')?.remove();render()};
-        return;
-       }
-       setTimeout(poll,1500);
-      }catch(e){progress.innerHTML='<span class="error">'+esc(e.message)+'</span>'}
-    };
-    poll();
+    document.querySelector('.modal')?.remove();
+    S.collection={sourceId:r.source.id,jobId:r.jobId,name:r.source.name};
+    S.page='collection';
+    render();
    }else{
     msg.className='success-box';
     msg.innerHTML='<b>Fonte salva.</b><br><button type="button" class="primary" id="closeAndRefresh">Fechar e atualizar</button>';
