@@ -206,7 +206,7 @@ function htmlItems(text,baseUrl){
  const src=String(text||'').replaceAll('\\/','/').replace(/&amp;/gi,'&'),out=[],seen=new Set(),pages=[],playerPages=[],meta=pageMeta(src,baseUrl);
  const addPage=(raw,priority=0)=>{
   const u=normalizePageUrl(raw,baseUrl);if(!u)return;
-  const score=priority||(/\\/(anime|episodio|temporada|genero|dublado|legendado|lancamento|ano|page|pagina)\\b/i.test(new URL(u).pathname)?5:1);
+  const score=priority||(/\/(anime|episodio|temporada|genero|dublado|legendado|lancamento|ano|page|pagina)\b/i.test(new URL(u).pathname)?5:1);
   pages.push({url:u,score});
  };
  const addPlayer=(raw,kind='iframe')=>{
