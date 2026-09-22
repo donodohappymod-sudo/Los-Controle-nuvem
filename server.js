@@ -44,7 +44,7 @@ const alters=[
 "ALTER TABLE generated_sources ADD COLUMN IF NOT EXISTS access_token text"
 ];
 for(const sql of alters) await q(sql);
-await q("UPDATE collection_jobs SET status='error',stage='stopped',message='Coleta interrompida pela reinicialização do serviço',updated_at=now() WHERE status IN ('queued','running')");
+await q("UPDATE collection_jobs SET message='Retomando coleta após reinicialização...',updated_at=now() WHERE status IN ('queued','running')");
 await q("CREATE INDEX IF NOT EXISTS items_source_idx ON items(source_id);CREATE INDEX IF NOT EXISTS items_type_idx ON items(type);CREATE INDEX IF NOT EXISTS episodes_source_idx ON episodes(source_id);CREATE INDEX IF NOT EXISTS series_source_idx ON series(source_id);");
 await q("UPDATE generated_sources SET access_token=replace(gen_random_uuid()::text,'-','') WHERE access_token IS NULL");
 const r=await q('SELECT id FROM users WHERE email=$1',[bootEmail]);
@@ -298,7 +298,7 @@ async function fetchSource(raw,requestedType='website',onProgress=()=>{}){
   if(parsed.items.length)return {kind:'m3u',sourceUrl:root.url,items:parsed.items,discovered:parsed.items.length,playlists:[root.url],pagesScanned:1,errors:[],message:parsed.isMaster?'Playlist HLS mestre analisada.':parsed.isMedia?'Stream HLS identificado.':'Playlist M3U/M3U8 analisada.'};
   if(type==='m3u8'||/m3u8/i.test(root.url)||/mpegurl|x-mpegurl/i.test(root.contentType))return {kind:'m3u8',sourceUrl:root.url,items:[{type:'channel',name:streamNameFromUrl(root.url,'Stream M3U8'),originalName:streamNameFromUrl(root.url,'Stream M3U8'),group:'',logo:'',streamUrl:root.url,status:'unknown',streamType:'m3u8',metadata:{discoveredFrom:'direct-m3u8'}}],discovered:1,playlists:[root.url],pagesScanned:1,errors:[],message:'Stream M3U8 direto identificado.'};
  }
- return crawlWebsite(root.url,{maxPages:Math.min(2500,Number(process.env.CRAWLER_MAX_PAGES)||1200),maxDepth:Math.min(6,Number(process.env.CRAWLER_MAX_DEPTH)||5),concurrency:6,onProgress});
+ return crawlWebsite(root.url,{maxPages:Math.min(2500,Number(process.env.CRAWLER_MAX_PAGES)||250),maxDepth:Math.min(6,Number(process.env.CRAWLER_MAX_DEPTH)||3),concurrency:Math.min(8,Number(process.env.CRAWLER_CONCURRENCY)||8),onProgress});
 }
 
 
@@ -347,30 +347,40 @@ function m3u(items){return '#EXTM3U\n'+items.map(x=>'#EXTINF:-1'+(x.group?' grou
 async function library(uid){const [a,s,e]=await Promise.all([q('SELECT i.id,i.source_id,i.type,i.name,i.original_name AS "originalName",i.group_name AS "group",i.category,i.country,i.language,i.logo,i.stream_url AS "streamUrl",i.stream_type AS "streamType",i.year,i.genres,i.description,i.status,i.last_verified_at AS "lastVerifiedAt",i.metadata FROM items i JOIN sources so ON so.id=i.source_id WHERE so.user_id=$1 ORDER BY i.created_at DESC LIMIT 5000',[uid]),q('SELECT x.id,x.source_id,x.title,x.original_title AS "originalTitle",x.year,x.genres,x.cover_url AS "coverUrl",x.description,x.status,x.metadata FROM series x JOIN sources so ON so.id=x.source_id WHERE so.user_id=$1 ORDER BY x.created_at DESC LIMIT 2000',[uid]),q('SELECT e.id,e.series_id,e.source_id,e.season_id,e.number,e.title,e.description,e.duration,e.stream_url AS "streamUrl",e.status,e.last_verified_at AS "lastVerifiedAt",e.metadata FROM episodes e JOIN sources so ON so.id=e.source_id WHERE so.user_id=$1 ORDER BY e.number LIMIT 5000',[uid])]);return {items:a.rows,series:s.rows,episodes:e.rows}}
 async function dashboard(uid){const sql=['SELECT count(*)::int n FROM sources WHERE user_id=$1',"SELECT count(*)::int n FROM items i JOIN sources s ON s.id=i.source_id WHERE s.user_id=$1 AND i.type='channel'","SELECT count(*)::int n FROM items i JOIN sources s ON s.id=i.source_id WHERE s.user_id=$1 AND i.type='movie'","SELECT count(*)::int n FROM series s JOIN sources so ON so.id=s.source_id WHERE so.user_id=$1","SELECT count(*)::int n FROM episodes e JOIN sources so ON so.id=e.source_id WHERE so.user_id=$1","SELECT count(*)::int n FROM items i JOIN sources s ON s.id=i.source_id WHERE s.user_id=$1 AND i.status='online'","SELECT count(*)::int n FROM items i JOIN sources s ON s.id=i.source_id WHERE s.user_id=$1 AND i.status IN ('error','timeout')"];const r=await Promise.all(sql.map(x=>q(x,[uid])));const v=r.map(x=>x.rows[0].n);return {sources:v[0],channels:v[1],movies:v[2],series:v[3],episodes:v[4],online:v[5],errors:v[6]}}
 
+const runningCollections=new Set();
+async function runCollectionJob(jobId,sourceId){
+ if(runningCollections.has(jobId))return;
+ runningCollections.add(jobId);
+ try{
+  const sr=await q('SELECT * FROM sources WHERE id=$1',[sourceId]); if(!sr.rowCount)throw Error('Fonte não encontrada');
+  const src=sr.rows[0];
+  await q("UPDATE collection_jobs SET status='running',stage='fetching',progress=5,message='Conectando à fonte...',updated_at=now() WHERE id=$1",[jobId]);
+  console.log('[COLLECTOR] start',jobId,src.url);
+  const c=await fetchSource(src.url,src.type,p=>q("UPDATE collection_jobs SET stage='crawling',progress=$2,message=$3,pages_scanned=$4,items_found=$5,error_count=$6,updated_at=now() WHERE id=$1",[jobId,Math.min(70,5+Math.min(65,Math.floor((p.pagesScanned/Math.max(1,p.pagesQueued))*65))),p.message,p.pagesScanned,p.itemsFound,p.errors]).catch(()=>{}));
+  await q("UPDATE collection_jobs SET stage='importing',progress=75,message=$2,pages_scanned=$3,items_found=$4,error_count=$5,updated_at=now() WHERE id=$1",[jobId,c.message||'Importando conteúdo...',c.pagesScanned||1,c.items?.length||0,c.errors?.length||0]);
+  const summary=await importItems(sourceId,c.items||[]);
+  const result={...c,summary};
+  await q("UPDATE collection_jobs SET status='done',stage='complete',progress=100,message=$2,pages_scanned=$3,items_found=$4,items_imported=$5,error_count=$6,result=$7,updated_at=now() WHERE id=$1",[jobId,(c.message||'Coleta concluída.')+' '+summary.series+' séries, '+summary.episodes+' episódios, '+summary.channels+' canais, '+summary.movies+' filmes.',c.pagesScanned||1,c.items?.length||0,summary.imported,summary.failed+(c.errors?.length||0),JSON.stringify(result)]);
+  await q("UPDATE sources SET last_collected_at=now(),content_count=$2,last_error=$3,status=$4,updated_at=now() WHERE id=$1",[sourceId,summary.imported,summary.failed?JSON.stringify(summary.errors.slice(0,5)):'',summary.imported||c.items.length?'active':'warning']);
+  console.log('[COLLECTOR] done',jobId,summary.imported,'/',summary.received);
+ }catch(e){
+  console.error('[COLLECTOR] failed',jobId,e);
+  await q("UPDATE collection_jobs SET status='error',stage='error',message=$2,error_count=error_count+1,updated_at=now() WHERE id=$1",[jobId,e.message]);
+  await q("UPDATE sources SET status='error',last_error=$2,updated_at=now() WHERE id=$1",[sourceId,e.message]);
+ }finally{runningCollections.delete(jobId)}
+}
 async function startCollection(sourceId){
  const jobId=id();
  await q("INSERT INTO collection_jobs(id,source_id,status,stage,message) VALUES($1,$2,'queued','starting','Preparando varredura...')",[jobId,sourceId]);
- (async()=>{
-  try{
-   const sr=await q('SELECT * FROM sources WHERE id=$1',[sourceId]); if(!sr.rowCount)throw Error('Fonte não encontrada');
-   const src=sr.rows[0];
-   await q("UPDATE collection_jobs SET status='running',stage='fetching',progress=5,message='Conectando à fonte...',updated_at=now() WHERE id=$1",[jobId]);
-   console.log('[COLLECTOR] start',jobId,src.url);
-   const c=await fetchSource(src.url,src.type,p=>q("UPDATE collection_jobs SET stage='crawling',progress=$2,message=$3,pages_scanned=$4,items_found=$5,error_count=$6,updated_at=now() WHERE id=$1",[jobId,Math.min(70,5+Math.min(65,Math.floor((p.pagesScanned/Math.max(1,p.pagesQueued))*65))),p.message,p.pagesScanned,p.itemsFound,p.errors]).catch(()=>{}));
-   await q("UPDATE collection_jobs SET stage='importing',progress=75,message=$2,pages_scanned=$3,items_found=$4,error_count=$5,updated_at=now() WHERE id=$1",[jobId,c.message||'Importando conteúdo...',c.pagesScanned||1,c.items?.length||0,c.errors?.length||0]);
-   const summary=await importItems(sourceId,c.items||[]);
-   const result={...c,summary};
-   await q("UPDATE collection_jobs SET status='done',stage='complete',progress=100,message=$2,pages_scanned=$3,items_found=$4,items_imported=$5,error_count=$6,result=$7,updated_at=now() WHERE id=$1",[jobId,(c.message||'Coleta concluída.')+' '+summary.series+' séries, '+summary.episodes+' episódios, '+summary.channels+' canais, '+summary.movies+' filmes.',c.pagesScanned||1,c.items?.length||0,summary.imported,summary.failed+(c.errors?.length||0),JSON.stringify(result)]);
-   await q("UPDATE sources SET last_collected_at=now(),content_count=$2,last_error=$3,status=$4,updated_at=now() WHERE id=$1",[sourceId,summary.imported,summary.failed?JSON.stringify(summary.errors.slice(0,5)):'',summary.imported||c.items.length?'active':'warning']);
-   console.log('[COLLECTOR] done',jobId,summary.imported,'/',summary.received);
-  }catch(e){
-   console.error('[COLLECTOR] failed',jobId,e);
-   await q("UPDATE collection_jobs SET status='error',stage='error',message=$2,error_count=error_count+1,updated_at=now() WHERE id=$1",[jobId,e.message]);
-   await q("UPDATE sources SET status='error',last_error=$2,updated_at=now() WHERE id=$1",[sourceId,e.message]);
-  }
- })();
+ void runCollectionJob(jobId,sourceId);
  return jobId;
 }
+async function resumeCollections(){
+ const r=await q("SELECT id,source_id FROM collection_jobs WHERE status IN ('queued','running') ORDER BY created_at ASC LIMIT 5");
+ for(const j of r.rows)void runCollectionJob(j.id,j.source_id);
+ if(r.rowCount)console.log('[COLLECTOR] resumed',r.rowCount,'job(s)');
+}
+
 async function latestJob(sourceId){const r=await q("SELECT id,source_id,status,stage,progress,message,pages_scanned AS \"pagesScanned\",items_found AS \"itemsFound\",items_imported AS \"itemsImported\",error_count AS \"errorCount\",result,created_at AS \"createdAt\",updated_at AS \"updatedAt\" FROM collection_jobs WHERE source_id=$1 ORDER BY created_at DESC LIMIT 1",[sourceId]);return r.rows[0]||null}
 
 async function aiDiagnose(){
@@ -405,7 +415,7 @@ if(req.method==='GET'&&p==='/api/auth/me')return json(res,200,{user:{id:uo.id,em
 if(req.method==='POST'&&p==='/api/auth/change-password'){const b=await body(req),old=String(b.currentPassword||''),nw=String(b.newPassword||'');if(nw.length<10)return json(res,400,{error:'Nova senha: mínimo de 10 caracteres'});const r=await q('SELECT password_hash FROM users WHERE id=$1',[uo.id]);if(!(await verify(old,r.rows[0].password_hash)))return json(res,400,{error:'Senha atual inválida'});await q('UPDATE users SET password_hash=$1 WHERE id=$2',[await hash(nw),uo.id]);await q('DELETE FROM sessions WHERE user_id=$1',[uo.id]);return json(res,200,{ok:true})}
 if(req.method==='GET'&&p==='/api/ai/diagnostics')return json(res,200,await aiDiagnose());
 if(req.method==='GET'&&p==='/api/dashboard')return json(res,200,await dashboard(uo.id));
-if(req.method==='GET'&&p==='/api/sources'){const r=await q("SELECT s.*,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='channel')::int channels,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='movie')::int movies,(SELECT count(*) FROM series x WHERE x.source_id=s.id)::int series,(SELECT count(*) FROM episodes e WHERE e.source_id=s.id)::int episodes FROM sources s WHERE s.user_id=$1 ORDER BY created_at DESC",[uo.id]);return json(res,200,{items:r.rows})}
+if(req.method==='GET'&&p==='/api/sources'){const r=await q("SELECT s.*,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='channel')::int channels,(SELECT count(*) FROM items i WHERE i.source_id=s.id AND i.type='movie')::int movies,(SELECT count(*) FROM series x WHERE x.source_id=s.id)::int series,(SELECT count(*) FROM episodes e WHERE e.source_id=s.id)::int episodes,(SELECT j.id FROM collection_jobs j WHERE j.source_id=s.id AND j.status IN ('queued','running') ORDER BY j.created_at DESC LIMIT 1) AS active_job_id,(SELECT j.status FROM collection_jobs j WHERE j.source_id=s.id AND j.status IN ('queued','running') ORDER BY j.created_at DESC LIMIT 1) AS active_job_status FROM sources s WHERE s.user_id=$1 ORDER BY created_at DESC",[uo.id]);return json(res,200,{items:r.rows})}
 if(req.method==='POST'&&p==='/api/sources'){
  const b=await body(req),name=String(b.name||'').trim(),url=String(b.url||'').trim(),type=String(b.type||'auto').toLowerCase(); console.log('[SOURCE] request',uo.email,name,url,type,'collectNow=',!!b.collectNow);
  if(!name||!url)return json(res,400,{error:'Nome e URL são obrigatórios'});
@@ -482,4 +492,4 @@ return json(res,200,{ok:true,status:'rendered'});
 return json(res,404,{error:'Not found'})}
 const page=()=>fs.readFileSync(path.join(__dirname,'public','app.html'),'utf8');
 const server=http.createServer(async(req,res)=>{try{const u=new URL(req.url,'http://'+(req.headers.host||'localhost'));if(u.pathname.startsWith('/api/'))return await api(req,res,u);if(req.method==='GET'){if(u.pathname==='/'||!path.extname(u.pathname))return send(res,200,'text/html; charset=utf-8',page());const file=path.normalize(path.join(__dirname,'public',u.pathname));if(file.startsWith(path.join(__dirname,'public'))&&fs.existsSync(file)){const ext=path.extname(file),type=ext==='.css'?'text/css':ext==='.js'?'application/javascript':'application/octet-stream';return send(res,200,type,fs.readFileSync(file))}}send(res,404,'text/plain','Not found')}catch(e){console.error('API/HTTP ERROR',req.method,req.url,e);if(!res.headersSent)json(res,500,{error:e.message||'Internal server error'});else res.end()}});
-init().then(()=>server.listen(PORT,'0.0.0.0',()=>console.log('LOS COLLECTOR 4 listening on '+PORT))).catch(e=>{console.error(e);process.exit(1)});
+init().then(async()=>{await resumeCollections();server.listen(PORT,'0.0.0.0',()=>console.log('LOS COLLECTOR 4 listening on '+PORT))}).catch(e=>{console.error(e);process.exit(1)});
