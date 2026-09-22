@@ -46,6 +46,7 @@ ALTER TABLE generated_sources ADD COLUMN IF NOT EXISTS access_token text"
 for(const sql of alters) await q(sql);
 await q("UPDATE collection_jobs SET status='error',stage='stopped',message='Coleta interrompida pela reinicialização do serviço',updated_at=now() WHERE status IN ('queued','running')");
 await q("CREATE INDEX IF NOT EXISTS items_source_idx ON items(source_id);CREATE INDEX IF NOT EXISTS items_type_idx ON items(type);CREATE INDEX IF NOT EXISTS episodes_source_idx ON episodes(source_id);CREATE INDEX IF NOT EXISTS series_source_idx ON series(source_id);");
+await q("UPDATE generated_sources SET access_token=replace(gen_random_uuid()::text,'-','') WHERE access_token IS NULL");
 const r=await q('SELECT id FROM users WHERE email=$1',[bootEmail]);
 if(!r.rowCount) await q('INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3)',[id(),bootEmail,await hash(bootPassword)]);
 else if(process.env.BOOTSTRAP_ADMIN_FORCE_RESET==='true'&&process.env.BOOTSTRAP_ADMIN_PASSWORD){
