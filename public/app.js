@@ -10,7 +10,7 @@ async function pageSources(){
  const d=await api('/api/sources');
  return '<div class="toolbar"><div><h2>Fontes</h2><p class="muted">Cadastre uma URL pública/autorizada e deixe o coletor analisar a fonte imediatamente.</p></div><button class="primary" id="newSource">+ Adicionar fonte</button></div>'+
  '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Status</th><th>Canais</th><th>Filmes</th><th>Séries</th><th>Episódios</th><th>Ações</th></tr></thead><tbody>'+
- d.items.map(x=>'<tr><td><b>'+esc(x.name)+'</b><small>'+esc(x.url)+'</small></td><td>'+esc(x.type)+'</td><td><em class="'+x.status+'">'+esc(x.status)+'</em></td><td>'+x.channels+'</td><td>'+x.movies+'</td><td>'+x.series+'</td><td>'+x.episodes+'</td><td><button class="mini collect" data-id="'+x.id+'">Coletar agora</button> <button class="mini del" data-id="'+x.id+'">Excluir</button></td></tr>').join('')+
+ d.items.map(x=>'<tr><td><b>'+esc(x.name)+'</b><small>'+esc(x.url)+'</small></td><td>'+esc(x.type)+'</td><td><em class="'+x.status+'">'+esc(x.status)+'</em></td><td>'+x.channels+'</td><td>'+x.movies+'</td><td>'+x.series+'</td><td>'+x.episodes+'</td><td>'+(x.active_job_id?'<button class="mini resume" data-id="'+x.id+'" data-job="'+x.active_job_id+'" data-name="'+esc(x.name)+'">Continuar coleta</button> ':'')+'<button class="mini collect" data-id="'+x.id+'">Coletar agora</button> <button class="mini del" data-id="'+x.id+'">Excluir</button></td></tr>').join('')+
  '</tbody></table></div></div><div id="sourceModal"></div>';
 }
 async function pageCollection(){
@@ -86,6 +86,7 @@ if(sf){
  };
 }
 
+document.querySelectorAll('.resume').forEach(b=>b.onclick=()=>{S.collection={sourceId:b.dataset.id,jobId:b.dataset.job,name:b.dataset.name};S.page='collection';render()});
 document.querySelectorAll('.collect').forEach(b=>b.onclick=async()=>{
  const old=b.textContent;b.disabled=true;b.textContent='Coletando...';
  try{
@@ -115,5 +116,5 @@ const pm=document.querySelector('#previewMerge');if(pm)pm.onclick=async()=>{cons
 const ns=document.querySelector('#newStudio');if(ns)ns.onclick=()=>modal('<div class="modal"><form id="studioForm" class="modal-card"><button type="button" class="close" id="closeS">×</button><h3>Novo projeto Studio</h3><label>Título<input name="title" required></label><label>Descrição<textarea name="description"></textarea></label><label>Capa URL<input name="coverUrl" type="url"></label><label>Vídeo de fundo autorizado<input name="backgroundUrl" type="url" required></label><label>Formato<select name="format"><option>9:16</option><option>16:9</option></select></label><label>Duração (5–60s)<input name="duration" type="number" min="5" max="60" value="15"></label><button class="primary">Criar projeto</button></form></div>');const st=document.querySelector('#studioForm');if(st){document.querySelector('#closeS').onclick=()=>document.querySelector('.modal').remove();st.onsubmit=async e=>{e.preventDefault();await api('/api/studio',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});document.querySelector('.modal').remove();render()}}
 document.querySelectorAll('.renderStudio').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/api/studio/'+b.dataset.id+'/render',{method:'POST'});alert('Render concluído.')}catch(e){alert(e.message)}finally{b.disabled=false;render()}});
 const pw=document.querySelector('#pwForm');if(pw)pw.onsubmit=async e=>{e.preventDefault();try{await api('/api/auth/change-password',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});alert('Senha atualizada. Faça login novamente.');S.user=null;login()}catch(x){alert(x.message)}}}
-api('/api/auth/me').then(r=>{S.user=r.user;render()}).catch(()=>login());
+api('/api/auth/me').then(async r=>{S.user=r.user;try{const d=await api('/api/sources');const active=d.items.find(x=>x.active_job_id);if(active){S.collection={sourceId:active.id,jobId:active.active_job_id,name:active.name};S.page='collection'}}catch{}render()}).catch(()=>login());
 })();
