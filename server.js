@@ -40,8 +40,8 @@ const alters=[
 "ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'draft'",
 "ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS duration_seconds int NOT NULL DEFAULT 15",
 "ALTER TABLE generated_sources ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES users(id) ON DELETE CASCADE",
-"ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES users(id) ON DELETE CASCADE
-ALTER TABLE generated_sources ADD COLUMN IF NOT EXISTS access_token text"
+"ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES users(id) ON DELETE CASCADE",
+"ALTER TABLE generated_sources ADD COLUMN IF NOT EXISTS access_token text"
 ];
 for(const sql of alters) await q(sql);
 await q("UPDATE collection_jobs SET status='error',stage='stopped',message='Coleta interrompida pela reinicialização do serviço',updated_at=now() WHERE status IN ('queued','running')");
