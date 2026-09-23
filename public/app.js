@@ -16,13 +16,13 @@ async function pageSources(){
 async function pageCollection(){
  if(!S.collection)return '<div class="panel"><p class="muted">Nenhuma coleta ativa.</p></div>';
  const j=await api('/api/sources/'+S.collection.sourceId+'/jobs/'+S.collection.jobId);
- const done=j.status==='done',failed=j.status==='error';
+ const done=['done','partial'].includes(j.status),failed=['error','stalled'].includes(j.status);
  return '<div class="toolbar"><div><h2>'+ (done?'✅ Resultado da coleta':'🔎 Varredura em andamento') +'</h2><p class="muted">'+esc(S.collection.name)+'</p></div><button class="mini" id="backSources">Voltar para fontes</button></div>'+
  '<section class="panel collection-panel"><div class="collection-big"><strong>'+j.progress+'%</strong><span>'+esc(j.stage)+'</span></div>'+
  '<div class="progress-track"><div class="progress-fill" style="width:'+Math.max(0,Math.min(100,j.progress))+'%"></div></div>'+
  '<h3>'+esc(j.message)+'</h3><p class="muted">'+j.pagesScanned+' páginas analisadas · '+j.itemsFound+' conteúdos encontrados · '+j.itemsImported+' importados · '+j.errorCount+' erros</p>'+
- (done?'<div class="success-box"><b>Coleta concluída.</b><br>'+esc(j.message)+(j.result&&j.result.summary?'<br>Recebidos: '+j.result.summary.received+' · Importados: '+j.result.summary.imported+' · Falhas: '+j.result.summary.failed:'')+'</div>':'')+
- (failed?'<div class="error"><b>Coleta interrompida.</b><br>'+esc(j.message)+'</div>':'')+
+ (done?'<div class="success-box"><b>'+(j.status==='partial'?'Coleta finalizada parcialmente.':'Coleta concluída.')+'</b><br>'+esc(j.message)+(j.result&&j.result.summary?'<br>Recebidos: '+j.result.summary.received+' · Importados: '+j.result.summary.imported+' · Falhas: '+j.result.summary.failed:'')+'</div>':'')+
+ (failed?'<div class="error"><b>'+(j.status==='stalled'?'Coleta interrompida: heartbeat perdido.':'Coleta interrompida.')+'</b><br>'+esc(j.message)+'</div>':'')+
  (done||failed?'<br><button class="primary" id="finishCollection">Ir para fontes</button><button class="mini" id="openLibraryAfterCollection">Abrir biblioteca</button>':'<p class="muted">Esta tela atualiza automaticamente a cada 1,5 segundo.</p>')+
  '</section>';
 }
@@ -44,7 +44,8 @@ const finish=document.querySelector('#finishCollection');if(finish)finish.onclic
 if(S.page==='collection'&&S.collection&&!S.collection.finished){
  const tick=async()=>{try{
   const j=await api('/api/sources/'+S.collection.sourceId+'/jobs/'+S.collection.jobId);
-  if(j.status==='done'||j.status==='error'){
+  if(!['done','partial','error','stalled'].includes(j.status)){try{await api('/api/collector/jobs/'+S.collection.jobId+'/heartbeat',{method:'POST'})}catch(e){}}
+  if(['done','partial','error','stalled'].includes(j.status)){
    S.collection.finished=true;
    render();
    return;
@@ -95,7 +96,8 @@ document.querySelectorAll('.collect').forEach(b=>b.onclick=async()=>{
   const poll=async()=>{
    try{
     const j=await api('/api/sources/'+b.dataset.id+'/jobs/'+r.jobId);
-    if(j.status==='done'){b.textContent=j.itemsImported+' importados';setTimeout(()=>render(),800);return}
+    if(!['done','partial','error','stalled'].includes(j.status)){try{await api('/api/collector/jobs/'+r.jobId+'/heartbeat',{method:'POST'})}catch(e){}}
+    if(j.status==='done'||j.status==='partial'){b.textContent=j.itemsImported+' importados';setTimeout(()=>render(),800);return}
     if(j.status==='error'){alert('Coleta: '+j.message);b.disabled=false;b.textContent=old;return}
     setTimeout(poll,1500);
    }catch(e){alert('Coleta: '+e.message);b.disabled=false;b.textContent=old}
