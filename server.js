@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS episodes(id uuid primary key,series_id uuid reference
 CREATE TABLE IF NOT EXISTS verification_runs(id uuid primary key,kind text not null,total int not null,online int not null,errors int not null,timeouts int not null,results jsonb not null default '[]'::jsonb,created_at timestamptz not null default now());
 CREATE TABLE IF NOT EXISTS generated_sources(id uuid primary key,name text not null,format text not null,content text not null,item_count int not null,access_token text unique,created_at timestamptz not null default now());
 CREATE TABLE IF NOT EXISTS collection_jobs(id uuid primary key,source_id uuid references sources(id) on delete cascade,status text not null,stage text not null default 'queued',progress int not null default 0,message text not null default '',pages_scanned int not null default 0,items_found int not null default 0,items_imported int not null default 0,error_count int not null default 0,result jsonb not null default '{}'::jsonb,created_at timestamptz not null default now(),updated_at timestamptz not null default now());
+CREATE TABLE IF NOT EXISTS collection_job_logs(id bigserial primary key,job_id uuid references collection_jobs(id) on delete cascade,level text not null default 'INFO',stage text not null default '',message text not null,progress int not null default 0,created_at timestamptz not null default now());
 CREATE TABLE IF NOT EXISTS studio_projects(id uuid primary key,title text not null,description text,cover_url text,background_url text,format text not null,duration int not null,status text not null,output_path text,created_at timestamptz not null default now());
 CREATE TABLE IF NOT EXISTS generated_sources(id uuid primary key,name text not null,format text not null,content text not null,item_count int not null,created_at timestamptz not null default now());
 `);
@@ -41,10 +42,13 @@ const alters=[
 "ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS duration_seconds int NOT NULL DEFAULT 15",
 "ALTER TABLE generated_sources ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES users(id) ON DELETE CASCADE",
 "ALTER TABLE studio_projects ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES users(id) ON DELETE CASCADE",
-"ALTER TABLE generated_sources ADD COLUMN IF NOT EXISTS access_token text"
+"ALTER TABLE generated_sources ADD COLUMN IF NOT EXISTS access_token text",
+"ALTER TABLE collection_jobs ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz NOT NULL DEFAULT now()",
+"ALTER TABLE collection_jobs ADD COLUMN IF NOT EXISTS started_at timestamptz",
+"ALTER TABLE collection_jobs ADD COLUMN IF NOT EXISTS finished_at timestamptz"
 ];
 for(const sql of alters) await q(sql);
-await q("UPDATE collection_jobs SET message='Retomando coleta após reinicialização...',updated_at=now() WHERE status IN ('queued','running')");
+await q("UPDATE collection_jobs SET status='stalled',stage='stalled',message='Execução interrompida pela reinicialização do servidor.',finished_at=now(),updated_at=now() WHERE status IN ('queued','running') AND updated_at < now()-interval '30 seconds'");
 await q("CREATE INDEX IF NOT EXISTS items_source_idx ON items(source_id);CREATE INDEX IF NOT EXISTS items_type_idx ON items(type);CREATE INDEX IF NOT EXISTS episodes_source_idx ON episodes(source_id);CREATE INDEX IF NOT EXISTS series_source_idx ON series(source_id);");
 await q("UPDATE generated_sources SET access_token=replace(gen_random_uuid()::text,'-','') WHERE access_token IS NULL");
 const r=await q('SELECT id FROM users WHERE email=$1',[bootEmail]);
@@ -348,30 +352,57 @@ async function library(uid){const [a,s,e]=await Promise.all([q('SELECT i.id,i.so
 async function dashboard(uid){const sql=['SELECT count(*)::int n FROM sources WHERE user_id=$1',"SELECT count(*)::int n FROM items i JOIN sources s ON s.id=i.source_id WHERE s.user_id=$1 AND i.type='channel'","SELECT count(*)::int n FROM items i JOIN sources s ON s.id=i.source_id WHERE s.user_id=$1 AND i.type='movie'","SELECT count(*)::int n FROM series s JOIN sources so ON so.id=s.source_id WHERE so.user_id=$1","SELECT count(*)::int n FROM episodes e JOIN sources so ON so.id=e.source_id WHERE so.user_id=$1","SELECT count(*)::int n FROM items i JOIN sources s ON s.id=i.source_id WHERE s.user_id=$1 AND i.status='online'","SELECT count(*)::int n FROM items i JOIN sources s ON s.id=i.source_id WHERE s.user_id=$1 AND i.status IN ('error','timeout')"];const r=await Promise.all(sql.map(x=>q(x,[uid])));const v=r.map(x=>x.rows[0].n);return {sources:v[0],channels:v[1],movies:v[2],series:v[3],episodes:v[4],online:v[5],errors:v[6]}}
 
 const runningCollections=new Set();
+async function jobLog(jobId,level,stage,message,progress=null){
+ try{
+  if(progress==null) await q("INSERT INTO collection_job_logs(job_id,level,stage,message,progress) SELECT $1,$2,$3,$4,progress FROM collection_jobs WHERE id=$1",[jobId,level,stage,String(message)]);
+  else await q("INSERT INTO collection_job_logs(job_id,level,stage,message,progress) VALUES($1,$2,$3,$4,$5)",[jobId,level,stage,String(message),Math.max(0,Math.min(100,Number(progress)||0))]);
+ }catch(e){console.error('[COLLECTOR] log error',jobId,e.message)}
+}
+async function touchJob(jobId,patch={}){
+ const sets=['heartbeat_at=now()','updated_at=now()'],values=[jobId];
+ for(const [k,v] of Object.entries(patch)){sets.push(k+'=$'+(values.length+1));values.push(v)}
+ await q("UPDATE collection_jobs SET "+sets.join(',')+" WHERE id=$1",values);
+}
 async function runCollectionJob(jobId,sourceId){
  if(runningCollections.has(jobId))return;
  runningCollections.add(jobId);
+ let heartbeat=null;
  try{
   const sr=await q('SELECT * FROM sources WHERE id=$1',[sourceId]); if(!sr.rowCount)throw Error('Fonte não encontrada');
   const src=sr.rows[0];
-  await q("UPDATE collection_jobs SET status='running',stage='fetching',progress=5,message='Conectando à fonte...',updated_at=now() WHERE id=$1",[jobId]);
+  await q("UPDATE collection_jobs SET status='running',stage='starting',progress=1,message='Coleta iniciada.',started_at=COALESCE(started_at,now()),heartbeat_at=now(),updated_at=now() WHERE id=$1",[jobId]);
+  await jobLog(jobId,'INFO','starting','[INICIANDO] Coleta criada e execução registrada.',1);
+  heartbeat=setInterval(()=>{touchJob(jobId).catch(e=>console.error('[COLLECTOR] heartbeat',jobId,e.message))},5000);
+  await jobLog(jobId,'INFO','fetching','[ETAPA 1/6] Validando e conectando à fonte.',5);
+  await touchJob(jobId,{stage:'fetching',message:'Conectando à fonte...',progress:5});
   console.log('[COLLECTOR] start',jobId,src.url);
-  const c=await fetchSource(src.url,src.type,p=>q("UPDATE collection_jobs SET stage='crawling',progress=$2,message=$3,pages_scanned=$4,items_found=$5,error_count=$6,updated_at=now() WHERE id=$1",[jobId,Math.min(70,5+Math.min(65,Math.floor((p.pagesScanned/Math.max(1,p.pagesQueued))*65))),p.message,p.pagesScanned,p.itemsFound,p.errors]).catch(()=>{}));
-  await q("UPDATE collection_jobs SET stage='importing',progress=75,message=$2,pages_scanned=$3,items_found=$4,error_count=$5,updated_at=now() WHERE id=$1",[jobId,c.message||'Importando conteúdo...',c.pagesScanned||1,c.items?.length||0,c.errors?.length||0]);
+  const c=await fetchSource(src.url,src.type,p=>{
+   const pct=Math.min(70,5+Math.min(65,Math.floor((p.pagesScanned/Math.max(1,p.pagesQueued))*65)));
+   touchJob(jobId,{stage:'crawling',message:p.message,progress:pct,pages_scanned:p.pagesScanned,items_found:p.itemsFound,error_count:p.errors}).catch(()=>{});
+   jobLog(jobId,'INFO','crawling',p.message,pct).catch(()=>{});
+  });
+  await jobLog(jobId,'INFO','found','[ETAPA 4/6] Conteúdo identificado. '+(c.items?.length||0)+' item(ns).',70);
+  await q("UPDATE collection_jobs SET stage='importing',progress=75,message=$2,pages_scanned=$3,items_found=$4,error_count=$5,heartbeat_at=now(),updated_at=now() WHERE id=$1",[jobId,c.message||'Importando conteúdo...',c.pagesScanned||1,c.items?.length||0,c.errors?.length||0]);
+  await jobLog(jobId,'INFO','importing','[ETAPA 5/6] Importando conteúdos na Biblioteca.',75);
   const summary=await importItems(sourceId,c.items||[]);
+  await jobLog(jobId,'INFO','saving','[ETAPA 6/6] Salvando resultado e atualizando a fonte.',95);
   const result={...c,summary};
-  await q("UPDATE collection_jobs SET status='done',stage='complete',progress=100,message=$2,pages_scanned=$3,items_found=$4,items_imported=$5,error_count=$6,result=$7,updated_at=now() WHERE id=$1",[jobId,(c.message||'Coleta concluída.')+' '+summary.series+' séries, '+summary.episodes+' episódios, '+summary.channels+' canais, '+summary.movies+' filmes.',c.pagesScanned||1,c.items?.length||0,summary.imported,summary.failed+(c.errors?.length||0),JSON.stringify(result)]);
+  const finalStatus=(summary.failed>0||c.errors?.length)?'partial':'done';
+  await q("UPDATE collection_jobs SET status=$2,stage='complete',progress=100,message=$3,pages_scanned=$4,items_found=$5,items_imported=$6,error_count=$7,result=$8,finished_at=now(),heartbeat_at=now(),updated_at=now() WHERE id=$1",[jobId,finalStatus,(c.message||'Coleta concluída.')+' '+summary.series+' séries, '+summary.episodes+' episódios, '+summary.channels+' canais, '+summary.movies+' filmes.',c.pagesScanned||1,c.items?.length||0,summary.imported,summary.failed+(c.errors?.length||0),JSON.stringify(result)]);
+  await jobLog(jobId,finalStatus==='done'?'INFO':'WARN','complete','[FINALIZADO] Coleta '+(finalStatus==='done'?'concluída':'finalizada parcialmente')+'. '+summary.imported+' conteúdo(s) importado(s).',100);
   await q("UPDATE sources SET last_collected_at=now(),content_count=$2,last_error=$3,status=$4,updated_at=now() WHERE id=$1",[sourceId,summary.imported,summary.failed?JSON.stringify(summary.errors.slice(0,5)):'',summary.imported||c.items.length?'active':'warning']);
   console.log('[COLLECTOR] done',jobId,summary.imported,'/',summary.received);
  }catch(e){
   console.error('[COLLECTOR] failed',jobId,e);
-  await q("UPDATE collection_jobs SET status='error',stage='error',message=$2,error_count=error_count+1,updated_at=now() WHERE id=$1",[jobId,e.message]);
+  await q("UPDATE collection_jobs SET status='error',stage='error',message=$2,error_count=error_count+1,finished_at=now(),heartbeat_at=now(),updated_at=now() WHERE id=$1",[jobId,e.message]);
+  await jobLog(jobId,'ERROR','error','[ERRO] '+e.message).catch(()=>{});
   await q("UPDATE sources SET status='error',last_error=$2,updated_at=now() WHERE id=$1",[sourceId,e.message]);
- }finally{runningCollections.delete(jobId)}
+ }finally{if(heartbeat)clearInterval(heartbeat);runningCollections.delete(jobId)}
 }
 async function startCollection(sourceId){
  const jobId=id();
- await q("INSERT INTO collection_jobs(id,source_id,status,stage,message) VALUES($1,$2,'queued','starting','Preparando varredura...')",[jobId,sourceId]);
+ await q("INSERT INTO collection_jobs(id,source_id,status,stage,message,heartbeat_at) VALUES($1,$2,'queued','starting','Preparando varredura...',now())",[jobId,sourceId]);
+ await jobLog(jobId,'INFO','starting','[INICIANDO] Job criado; aguardando execução.',0);
  void runCollectionJob(jobId,sourceId);
  return jobId;
 }
@@ -380,9 +411,19 @@ async function resumeCollections(){
  for(const j of r.rows)void runCollectionJob(j.id,j.source_id);
  if(r.rowCount)console.log('[COLLECTOR] resumed',r.rowCount,'job(s)');
 }
+async function markStalledJobs(){
+ const r=await q("UPDATE collection_jobs SET status='stalled',stage='stalled',message='Nenhum heartbeat recebido; execução marcada como interrompida.',finished_at=now(),updated_at=now() WHERE status IN ('queued','running') AND heartbeat_at < now()-interval '90 seconds' RETURNING id");
+ if(r.rowCount)for(const j of r.rows)await jobLog(j.id,'ERROR','stalled','[STALLED] Nenhum heartbeat recebido por mais de 90 segundos.').catch(()=>{});
+}
 
-async function latestJob(sourceId){const r=await q("SELECT id,source_id,status,stage,progress,message,pages_scanned AS \"pagesScanned\",items_found AS \"itemsFound\",items_imported AS \"itemsImported\",error_count AS \"errorCount\",result,created_at AS \"createdAt\",updated_at AS \"updatedAt\" FROM collection_jobs WHERE source_id=$1 ORDER BY created_at DESC LIMIT 1",[sourceId]);return r.rows[0]||null}
-
+async function latestJob(sourceId){const r=await q("SELECT id,source_id,status,stage,progress,message,pages_scanned AS \"pagesScanned\",items_found AS \"itemsFound\",items_imported AS \"itemsImported\",error_count AS \"errorCount\",result,created_at AS \"createdAt\",updated_at AS \"updatedAt\",heartbeat_at AS \"heartbeatAt\",started_at AS \"startedAt\",finished_at AS \"finishedAt\" FROM collection_jobs WHERE source_id=$1 ORDER BY created_at DESC LIMIT 1",[sourceId]);return r.rows[0]||null}
+async function jobStatus(jobId,uid){
+ const r=await q("SELECT j.id,j.source_id,j.status,j.stage,j.progress,j.message,j.pages_scanned AS \"pagesScanned\",j.items_found AS \"itemsFound\",j.items_imported AS \"itemsImported\",j.error_count AS \"errorCount\",j.result,j.created_at AS \"createdAt\",j.updated_at AS \"updatedAt\",j.heartbeat_at AS \"heartbeatAt\",j.started_at AS \"startedAt\",j.finished_at AS \"finishedAt\",s.name FROM collection_jobs j JOIN sources s ON s.id=j.source_id WHERE j.id=$1 AND s.user_id=$2",[jobId,uid]);
+ if(!r.rowCount)return null;
+ const j=r.rows[0];
+ if(['queued','running'].includes(j.status)&&Date.now()-new Date(j.heartbeatAt).getTime()>90000){await q("UPDATE collection_jobs SET status='stalled',stage='stalled',message='Nenhum heartbeat recebido por mais de 90 segundos.',finished_at=now(),updated_at=now() WHERE id=$1",[jobId]);j.status='stalled';j.stage='stalled';}
+ return j;
+}
 async function aiDiagnose(){
  const checks=[];
  const add=(name,ok,detail)=>checks.push({name,ok:Boolean(ok),detail:String(detail||'')});
@@ -434,11 +475,12 @@ if(req.method==='POST'&&p.match(/^\/api\/sources\/[^/]+\/collect$/)){
  const jobId=await startCollection(sid);
  return json(res,202,{jobId});
 }
+if(req.method==='GET'&&p.match(/^\/api\/collector\/jobs\/[^/]+\/logs$/)){const jobId=p.split('/')[4],own=await q("SELECT j.id FROM collection_jobs j JOIN sources s ON s.id=j.source_id WHERE j.id=$1 AND s.user_id=$2",[jobId,uo.id]);if(!own.rowCount)return json(res,404,{error:'Coleta não encontrada'});const r=await q("SELECT id,level,stage,message,progress,created_at AS \"createdAt\" FROM collection_job_logs WHERE job_id=$1 ORDER BY id ASC LIMIT 1000",[jobId]);return json(res,200,{items:r.rows})}
+if(req.method==='POST'&&p.match(/^\/api\/collector\/jobs\/[^/]+\/heartbeat$/)){const jobId=p.split('/')[4],own=await q("SELECT j.id FROM collection_jobs j JOIN sources s ON s.id=j.source_id WHERE j.id=$1 AND s.user_id=$2",[jobId,uo.id]);if(!own.rowCount)return json(res,404,{error:'Coleta não encontrada'});await q("UPDATE collection_jobs SET heartbeat_at=now(),updated_at=now() WHERE id=$1 AND status IN ('queued','running')",[jobId]);return json(res,200,{ok:true,jobId,time:now()})}
 if(req.method==='GET'&&p.match(/^\/api\/sources\/[^/]+\/jobs\/[^/]+$/)){
- const parts=p.split('/'),sid=parts[3],jobId=parts[5];
- const r=await q("SELECT j.id,j.source_id,j.status,j.stage,j.progress,j.message,j.pages_scanned AS \"pagesScanned\",j.items_found AS \"itemsFound\",j.items_imported AS \"itemsImported\",j.error_count AS \"errorCount\",j.result,j.created_at AS \"createdAt\",j.updated_at AS \"updatedAt\" FROM collection_jobs j JOIN sources s ON s.id=j.source_id WHERE j.id=$1 AND j.source_id=$2 AND s.user_id=$3",[jobId,sid,uo.id]);
- if(!r.rowCount)return json(res,404,{error:'Coleta não encontrada'});
- return json(res,200,r.rows[0]);
+ const parts=p.split('/'),sid=parts[3],jobId=parts[5],j=await jobStatus(jobId,uo.id);
+ if(!j||j.source_id!==sid)return json(res,404,{error:'Coleta não encontrada'});
+ return json(res,200,j);
 }
 if(req.method==='GET'&&p.match(/^\/api\/sources\/[^/]+\/job$/)){
  const sid=p.split('/')[3],own=await q('SELECT id FROM sources WHERE id=$1 AND user_id=$2',[sid,uo.id]);if(!own.rowCount)return json(res,404,{error:'Fonte não encontrada'});const j=await latestJob(sid);return json(res,200,{job:j});
@@ -492,4 +534,4 @@ return json(res,200,{ok:true,status:'rendered'});
 return json(res,404,{error:'Not found'})}
 const page=()=>fs.readFileSync(path.join(__dirname,'public','app.html'),'utf8');
 const server=http.createServer(async(req,res)=>{try{const u=new URL(req.url,'http://'+(req.headers.host||'localhost'));if(u.pathname.startsWith('/api/'))return await api(req,res,u);if(req.method==='GET'){if(u.pathname==='/'||!path.extname(u.pathname))return send(res,200,'text/html; charset=utf-8',page());const file=path.normalize(path.join(__dirname,'public',u.pathname));if(file.startsWith(path.join(__dirname,'public'))&&fs.existsSync(file)){const ext=path.extname(file),type=ext==='.css'?'text/css':ext==='.js'?'application/javascript':'application/octet-stream';return send(res,200,type,fs.readFileSync(file))}}send(res,404,'text/plain','Not found')}catch(e){console.error('API/HTTP ERROR',req.method,req.url,e);if(!res.headersSent)json(res,500,{error:e.message||'Internal server error'});else res.end()}});
-init().then(async()=>{await resumeCollections();server.listen(PORT,'0.0.0.0',()=>console.log('LOS COLLECTOR 4 listening on '+PORT))}).catch(e=>{console.error(e);process.exit(1)});
+init().then(async()=>{await markStalledJobs();await resumeCollections();setInterval(()=>markStalledJobs().catch(e=>console.error('[COLLECTOR] watchdog',e.message)),30000);server.listen(PORT,'0.0.0.0',()=>console.log('LOS COLLECTOR 4 listening on '+PORT))}).catch(e=>{console.error(e);process.exit(1)});
